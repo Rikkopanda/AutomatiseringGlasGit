@@ -13,14 +13,30 @@
 #define PIN_ENABLE    27
 #define PIN_LIMIT_L   4
 #define PIN_LIMIT_R   5
-#define PIN_BTN_LEFT  12
-#define PIN_BTN_RIGHT 13
-#define PIN_BTN_HOME  14
-#define PIN_POT       34
+#define PIN_POT_SPEED 34
+#define PIN_POT_ACCEL 35
+#define LIMIT_SWITCH_NORMALLY_CLOSED 1 // recommended: an open/broken wire stops motion
+#define DEBUG_INPUTS 1                 // set to 0 to silence keypad/pot/limit diagnostics
+constexpr uint32_t LIMIT_DEBOUNCE_MS = 50;
 #define USE_ENABLE_PIN 1    // 1 = physical enable wire used, 0 = no enable pin on drive
 #define ENABLE_ACTIVE_LOW 1   // 1: ENABLE low = ON (common), 0: ENABLE high = ON
-#define USE_BUTTONS   0   // 1 = buttons installed, 0 = serial only
 #define USE_SERIAL_STEPS 1   // 1 = via serial, 0 = via potmeter
+
+// 4x4 membrane keypad: connect its eight pins directly to these GPIOs.
+// The usual keypad order is R1,R2,R3,R4,C1,C2,C3,C4.
+const uint8_t KEYPAD_ROWS[4] = {13, 18, 19, 23};
+const uint8_t KEYPAD_COLS[4] = {25, 26, 32, 33};
+const char KEYPAD_MAP[4][4] = {
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
+};
+
+const float MIN_MAX_SPEED = 100.0f;
+const float MAX_MAX_SPEED = 200000.0f;
+const float MIN_ACCELERATION = 100.0f;
+const float MAX_ACCELERATION = 500000.0f;
 
 // ================== PARAMETERS ==================
 const float DEFAULT_MAX_SPEED    = 142000.0f;   // steps/sec
@@ -55,6 +71,19 @@ long moveTotalSteps = 0;
 long moveNextStep = 0;
 bool moveDirPositive = true;
 TaskHandle_t moveServiceTaskHandle = nullptr;
+String keypadNumber;
+char lastKey = '\0';
+char keypadCandidate = '\0';
+unsigned long keypadCandidateSinceMs = 0;
+unsigned long lastPotReadMs = 0;
+
+struct DebouncedLimit {
+  bool stable = true;       // safe state until the input has been sampled
+  bool candidate = true;
+  unsigned long candidateSinceMs = 0;
+};
+DebouncedLimit leftLimit;
+DebouncedLimit rightLimit;
 
 LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 
@@ -65,6 +94,15 @@ void stopMotion();
 void setDriveEnabled(bool enabled);
 void updateLcdStatus(bool force = false);
 void moveServiceTask(void *param);
+bool leftLimitActive();
+bool rightLimitActive();
+bool limitBlocksDirection(bool positive);
+void stopForLimit(const char *which);
+void updateLimitSwitches();
+char readKeypad();
+void handleKeypad();
+void updatePotSettings();
+void debugLimitSwitches();
 
 #if USE_SERIAL_STEPS
 long manualSteps = 1000;
@@ -72,6 +110,7 @@ void printStatus();
 
 // ================== SERIAL COMMANDS ==================
 void printSerialHelp() {
+  Serial.println("Keypad: digits=distance, #=save, A=right, B=left, C=zero at left limit, D=stop, *=clear");
   Serial.println("Commands: steps=<300-60000>, speed=<100-200000>, accel=<100-500000>, move=<steps>, left/right, <n> r|l, time=<steps>, cont=<hz>, stop, enable, disable, status, menu, pos=<waarde>, help");
 }
 
@@ -220,10 +259,7 @@ void runMove(long steps, const char *label) {
   }
 }
 
-void handleSerialCommand() {
-  if (!Serial.available()) return;
-
-  String command = Serial.readStringUntil('\n');
+void processSerialCommand(String command) {
   command.trim();
   if (command.length() == 0) return;
 
@@ -359,6 +395,24 @@ void handleSerialCommand() {
 
   Serial.println("Onbekend commando. Typ help.");
 }
+
+// Assemble a complete command without blocking motor/limit-switch processing.
+void handleSerialCommand() {
+  static String command;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      processSerialCommand(command);
+      command = "";
+    } else if (command.length() < 80) {
+      command += c;
+    } else {
+      command = ""; // discard an overlong malformed command
+      Serial.println("Command too long - discarded");
+    }
+  }
+}
 #endif
 
 float estimateMoveMs(long steps, long *plannedPulses) {
@@ -410,6 +464,11 @@ bool startContinuousTest(long signedHz) {
   long hz = labs(signedHz);
   hz = constrain(hz, 10, 200000);
   bool dir = signedHz > 0;
+  if (limitBlocksDirection(dir)) {
+    Serial.println("Continuous move refused: limit switch is active");
+    return false;
+  }
+  moveDirPositive = dir;
   digitalWrite(PIN_DIR, dir ? HIGH : LOW);
 
   uint32_t periodUs = (uint32_t)(1000000UL / (uint32_t)hz);
@@ -456,6 +515,167 @@ void setDriveEnabled(bool enabled) {
 #endif
 }
 
+// Wire each switch between its GPIO and GND. With an NC switch the normal
+// closed circuit reads LOW; a pressed switch or broken wire reads HIGH.
+bool rawLimitActive(uint8_t pin) {
+  bool level = digitalRead(pin) == HIGH;
+  return LIMIT_SWITCH_NORMALLY_CLOSED ? level : !level;
+}
+
+void updateOneLimit(DebouncedLimit &limit, bool rawActive) {
+  if (rawActive != limit.candidate) {
+    limit.candidate = rawActive;
+    limit.candidateSinceMs = millis();
+    return;
+  }
+  if (limit.stable != limit.candidate &&
+      millis() - limit.candidateSinceMs >= LIMIT_DEBOUNCE_MS) {
+    limit.stable = limit.candidate;
+  }
+}
+
+void updateLimitSwitches() {
+  updateOneLimit(leftLimit, rawLimitActive(PIN_LIMIT_L));
+  updateOneLimit(rightLimit, rawLimitActive(PIN_LIMIT_R));
+}
+
+bool leftLimitActive() {
+  return leftLimit.stable;
+}
+
+bool rightLimitActive() {
+  return rightLimit.stable;
+}
+
+bool limitBlocksDirection(bool positive) {
+  return positive ? rightLimitActive() : leftLimitActive();
+}
+
+void stopForLimit(const char *which) {
+  Serial.printf("%s limit active - motion stopped\n", which);
+  stopMotion();
+}
+
+char readKeypad() {
+  // One row at a time is driven LOW; a pressed key pulls its column LOW.
+  for (uint8_t row = 0; row < 4; ++row) {
+    for (uint8_t r = 0; r < 4; ++r) digitalWrite(KEYPAD_ROWS[r], HIGH);
+    digitalWrite(KEYPAD_ROWS[row], LOW);
+    delayMicroseconds(3);
+    for (uint8_t col = 0; col < 4; ++col) {
+      if (digitalRead(KEYPAD_COLS[col]) == LOW) return KEYPAD_MAP[row][col];
+    }
+  }
+  return '\0';
+}
+
+void handleKeypad() {
+  char key = readKeypad();
+  if (key != keypadCandidate) {
+    keypadCandidate = key;
+    keypadCandidateSinceMs = millis();
+    return;
+  }
+  if (key == lastKey) return;
+  // A key must be present for 40 ms; release must be stable for 40 ms too.
+  // This prevents a floating/noisy keypad cable from creating key events.
+  if (millis() - keypadCandidateSinceMs < 40) return;
+
+  lastKey = key;
+  if (key == '\0') return; // act only once, when a key is pressed
+
+#if DEBUG_INPUTS
+  Serial.printf("Keypad pressed: %c\n", key);
+#endif
+
+  if (key >= '0' && key <= '9') {
+    if (keypadNumber.length() < 7) keypadNumber += key;
+    Serial.printf("Keypad steps: %s\n", keypadNumber.c_str());
+    return;
+  }
+
+  if (key == '*') {
+    keypadNumber = "";
+    Serial.println("Keypad value cleared");
+    return;
+  }
+
+  if (key == 'D') {
+    stopMotion();
+    return;
+  }
+
+  if (key == 'C') {
+    if (leftLimitActive()) {
+      currentPos = 0;
+      Serial.println("Position set to zero at left limit");
+    } else {
+      Serial.println("Refusing zero: move to the left limit first");
+    }
+    return;
+  }
+
+  long steps = keypadNumber.length() ? keypadNumber.toInt() : manualSteps;
+  steps = constrain(steps, 1L, 60000L);
+  if (key == '#') {
+    manualSteps = steps;
+    keypadNumber = "";
+    Serial.printf("Step distance set to %ld\n", manualSteps);
+  } else if (key == 'A') {
+    runMove(steps, "Move RIGHT");
+    keypadNumber = "";
+  } else if (key == 'B') {
+    runMove(-steps, "Move LEFT");
+    keypadNumber = "";
+  }
+}
+
+void updatePotSettings() {
+  if (millis() - lastPotReadMs < 100) return;
+  lastPotReadMs = millis();
+
+  // ADC1 pins are used deliberately; ADC2 pins cannot be read while Wi-Fi is active.
+  int speedSum = 0;
+  int accelSum = 0;
+  for (uint8_t sample = 0; sample < 8; ++sample) {
+    speedSum += analogRead(PIN_POT_SPEED);
+    accelSum += analogRead(PIN_POT_ACCEL);
+  }
+  int speedRaw = speedSum / 8;
+  int accelRaw = accelSum / 8;
+  maxSpeedSetting = MIN_MAX_SPEED +
+                    (MAX_MAX_SPEED - MIN_MAX_SPEED) * speedRaw / 4095.0f;
+  accelerationSetting = MIN_ACCELERATION +
+                        (MAX_ACCELERATION - MIN_ACCELERATION) * accelRaw / 4095.0f;
+
+#if DEBUG_INPUTS
+  static int lastSpeedRaw = -10000;
+  static int lastAccelRaw = -10000;
+  // Ignore ADC jitter, but report the first read and each meaningful turn.
+  if (abs(speedRaw - lastSpeedRaw) >= 25 || abs(accelRaw - lastAccelRaw) >= 25) {
+    lastSpeedRaw = speedRaw;
+    lastAccelRaw = accelRaw;
+    Serial.printf("Pots: speed raw=%d -> %.0f steps/s, accel raw=%d -> %.0f steps/s^2\n",
+                  speedRaw, maxSpeedSetting, accelRaw, accelerationSetting);
+  }
+#endif
+}
+
+void debugLimitSwitches() {
+#if DEBUG_INPUTS
+  static int lastLeft = -1;
+  static int lastRight = -1;
+  int left = leftLimitActive();
+  int right = rightLimitActive();
+  if (left != lastLeft || right != lastRight) {
+    lastLeft = left;
+    lastRight = right;
+    Serial.printf("Limits: left=%s, right=%s\n",
+                  left ? "ACTIVE" : "clear", right ? "ACTIVE" : "clear");
+  }
+#endif
+}
+
 // ================== RMT INIT ==================
 void setupRMT() {
   rmt_config_t config = {};
@@ -479,6 +699,10 @@ bool prepareMove(long steps) {
   if (isMoving || isContinuous) return false;
 
   moveDirPositive = steps > 0;
+  if (limitBlocksDirection(moveDirPositive)) {
+    Serial.println("Move refused: limit switch is active");
+    return false;
+  }
   moveTotalSteps = labs(steps);
   moveNextStep = 0;
   moveChunkDone = false;
@@ -519,6 +743,7 @@ void IRAM_ATTR rmt_tx_end_callback(rmt_channel_t channel, void *arg) {
 // ================== SETUP ==================
 void setup() {
   Serial.begin(115200);
+  Serial.setTimeout(10); // never leave a running motor unchecked for a 1 s serial timeout
   delay(300);
 
   rmtItems = (rmt_item32_t *)heap_caps_malloc(RMT_BUFFER_ITEMS * sizeof(rmt_item32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -544,23 +769,25 @@ void setup() {
   lcdReady = true;
 
   pinMode(PIN_DIR, OUTPUT);
+  pinMode(PIN_LIMIT_L, INPUT_PULLUP);
+  pinMode(PIN_LIMIT_R, INPUT_PULLUP);
+
+  for (uint8_t row = 0; row < 4; ++row) {
+    pinMode(KEYPAD_ROWS[row], OUTPUT);
+    digitalWrite(KEYPAD_ROWS[row], HIGH);
+  }
+  for (uint8_t col = 0; col < 4; ++col) {
+    pinMode(KEYPAD_COLS[col], INPUT_PULLUP);
+  }
   
 #if USE_ENABLE_PIN
   pinMode(PIN_ENABLE, OUTPUT);
   setDriveEnabled(false);
 #endif
 
-#if USE_BUTTONS
-  pinMode(PIN_LIMIT_L, INPUT_PULLUP);
-  pinMode(PIN_LIMIT_R, INPUT_PULLUP);
-  pinMode(PIN_BTN_LEFT, INPUT_PULLUP);
-  pinMode(PIN_BTN_RIGHT, INPUT_PULLUP);
-  pinMode(PIN_BTN_HOME, INPUT_PULLUP);
-#endif
-
-#if !USE_SERIAL_STEPS
   analogReadResolution(12);
-#endif
+  analogSetPinAttenuation(PIN_POT_SPEED, ADC_11db);
+  analogSetPinAttenuation(PIN_POT_ACCEL, ADC_11db);
 
   setupRMT();
 
@@ -578,6 +805,9 @@ void setup() {
   rmt_register_tx_end_callback(rmt_tx_end_callback, NULL);
 
   Serial.println("T6 – Volledige RMT buffer versie klaar");
+#if DEBUG_INPUTS
+  Serial.println("Input debug enabled: press a keypad key, turn a pot, or operate a limit switch.");
+#endif
 #if USE_SERIAL_STEPS
   printSerialHelp();
   printStatus();
@@ -591,52 +821,20 @@ void setup() {
 
 // ================== LOOP ==================
 void loop() {
+  updateLimitSwitches();
+  if ((isMoving || isContinuous) && limitBlocksDirection(moveDirPositive)) {
+    stopForLimit(moveDirPositive ? "RIGHT" : "LEFT");
+  }
+
+  updatePotSettings();
+  debugLimitSwitches();
+  handleKeypad();
+
 #if USE_SERIAL_STEPS
   handleSerialCommand();
 #endif
 
   updateLcdStatus(false);
-
-#if USE_BUTTONS
-  // Limits controleren tijdens beweging
-  // if (isMoving) {
-  //   if (digitalRead(PIN_LIMIT_L) == LOW || digitalRead(PIN_LIMIT_R) == LOW) {
-  //     rmt_tx_stop(RMT_CH);
-  //     isMoving = false;
-  //     Serial.println("Limit geraakt – gestopt");
-  //   }
-  // }
-
-  // Knoppen
-  static unsigned long lastBtn = 0;
-  if (!isMoving && millis() - lastBtn > 50) {
-    lastBtn = millis();
-
-#if USE_SERIAL_STEPS
-    long steps = manualSteps;
-#else
-    int pot = analogRead(PIN_POT);
-    long steps = map(pot, 0, 4095, 300, 6000);
-#endif
-
-    if (digitalRead(PIN_BTN_LEFT) == LOW) {
-      if (prepareMove(-steps)) {
-        currentPos -= steps;   // we tellen vooruit (of gebruik encoder feedback later)
-        Serial.printf("Move LEFT %ld steps\n", steps);
-      }
-    }
-    if (digitalRead(PIN_BTN_RIGHT) == LOW) {
-      if (prepareMove(steps)) {
-        currentPos += steps;
-        Serial.printf("Move RIGHT %ld steps\n", steps);
-      }
-    }
-    if (digitalRead(PIN_BTN_HOME) == LOW) {
-      // Eenvoudige home – later uitbreiden
-      // Serial.println("Home nog niet geïmplementeerd in deze versie");
-    }
-  }
-#endif
 
   // Debug
   static unsigned long lastPrint = 0;
