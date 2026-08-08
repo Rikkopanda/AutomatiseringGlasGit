@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include "driver/rmt.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <vector>
@@ -52,6 +54,7 @@ bool moveActive = false;
 long moveTotalSteps = 0;
 long moveNextStep = 0;
 bool moveDirPositive = true;
+TaskHandle_t moveServiceTaskHandle = nullptr;
 
 LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 
@@ -61,6 +64,7 @@ bool startContinuousTest(long signedHz);
 void stopMotion();
 void setDriveEnabled(bool enabled);
 void updateLcdStatus(bool force = false);
+void moveServiceTask(void *param);
 
 #if USE_SERIAL_STEPS
 long manualSteps = 1000;
@@ -188,6 +192,15 @@ void serviceMoveChunks() {
     isMoving = false;
     setDriveEnabled(false);
     Serial.println("Move chunk failed");
+  }
+}
+
+void moveServiceTask(void *param) {
+  (void)param;
+
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    serviceMoveChunks();
   }
 }
 
@@ -493,6 +506,13 @@ void IRAM_ATTR rmt_tx_end_callback(rmt_channel_t channel, void *arg) {
   (void)arg;
   if (moveActive && !isContinuous) {
     moveChunkDone = true;
+    BaseType_t higherPriorityTaskWoken = pdFALSE;
+    if (moveServiceTaskHandle != nullptr) {
+      vTaskNotifyGiveFromISR(moveServiceTaskHandle, &higherPriorityTaskWoken);
+    }
+    if (higherPriorityTaskWoken == pdTRUE) {
+      portYIELD_FROM_ISR();
+    }
   }
 }
 
@@ -544,6 +564,16 @@ void setup() {
 
   setupRMT();
 
+  xTaskCreatePinnedToCore(
+    moveServiceTask,
+    "moveServiceTask",
+    4096,
+    nullptr,
+    3,
+    &moveServiceTaskHandle,
+    1
+  );
+
   // Callback als beweging klaar is
   rmt_register_tx_end_callback(rmt_tx_end_callback, NULL);
 
@@ -564,8 +594,6 @@ void loop() {
 #if USE_SERIAL_STEPS
   handleSerialCommand();
 #endif
-
-  serviceMoveChunks();
 
   updateLcdStatus(false);
 
