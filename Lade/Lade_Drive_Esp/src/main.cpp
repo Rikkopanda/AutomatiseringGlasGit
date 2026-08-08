@@ -26,11 +26,13 @@ constexpr uint32_t LIMIT_DEBOUNCE_MS = 50;
 // The usual keypad order is R1,R2,R3,R4,C1,C2,C3,C4.
 const uint8_t KEYPAD_ROWS[4] = {13, 18, 19, 23};
 const uint8_t KEYPAD_COLS[4] = {25, 26, 32, 33};
+// This keypad's ribbon is transposed/reversed relative to the usual R1..R4,
+// C1..C4 order.  Keep the wiring and use this calibrated key map.
 const char KEYPAD_MAP[4][4] = {
-  {'1', '2', '3', 'A'},
-  {'4', '5', '6', 'B'},
-  {'7', '8', '9', 'C'},
-  {'*', '0', '#', 'D'}
+  {'D', 'C', 'B', 'A'},
+  {'#', '9', '6', '3'},
+  {'0', '8', '5', '2'},
+  {'*', '7', '4', '1'}
 };
 
 const float MIN_MAX_SPEED = 100.0f;
