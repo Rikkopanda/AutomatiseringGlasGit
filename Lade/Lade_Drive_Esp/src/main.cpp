@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "driver/rmt.h"
+#include "esp_heap_caps.h"
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <vector>
@@ -20,8 +21,8 @@
 #define USE_SERIAL_STEPS 1   // 1 = via serial, 0 = via potmeter
 
 // ================== PARAMETERS ==================
-const float DEFAULT_MAX_SPEED    = 42000.0f;   // steps/sec
-const float DEFAULT_ACCELERATION = 22000.0f;   // steps/sec²
+const float DEFAULT_MAX_SPEED    = 142000.0f;   // steps/sec
+const float DEFAULT_ACCELERATION = 102000.0f;  // steps/sec²
 const uint32_t PULSE_US  = 5;         // pulse breedte (5 us is usually safer for servo/driver inputs)
 float maxSpeedSetting = DEFAULT_MAX_SPEED;
 float accelerationSetting = DEFAULT_ACCELERATION;
@@ -34,9 +35,10 @@ float accelerationSetting = DEFAULT_ACCELERATION;
 // ================== RMT ==================
 #define RMT_CH          RMT_CHANNEL_0
 #define RMT_DIV         80            // 1 µs tick
-#define MAX_RMT_ITEMS   4096             // max items per buffer (fits ESP32 DRAM much better)
+constexpr size_t RMT_BUFFER_ITEMS = 16384;
 
-rmt_item32_t rmtItems[MAX_RMT_ITEMS];
+rmt_item32_t *rmtItems = nullptr;
+size_t rmtBufferItems = 0;
 
 // ================== STATE ==================
 volatile long currentPos = 0;
@@ -131,7 +133,7 @@ long fillMoveChunk(long startStep, long chunkSteps, long totalSteps, float maxSp
   long totalItems = 0;
   long endStep = startStep + chunkSteps;
 
-  for (long stepIndex = startStep; stepIndex < endStep && totalItems < MAX_RMT_ITEMS - 2; ++stepIndex) {
+  for (long stepIndex = startStep; stepIndex < endStep && totalItems < (long)rmtBufferItems - 2; ++stepIndex) {
     uint32_t period = stepPeriodUsForIndex(stepIndex, totalSteps, maxSpeed, accel);
 
     rmtItems[totalItems].level0 = 1;
@@ -155,8 +157,8 @@ bool queueNextMoveChunk() {
   if (remaining <= 0) return false;
 
   long chunkSteps = remaining;
-  if (chunkSteps > (MAX_RMT_ITEMS - 2)) {
-    chunkSteps = MAX_RMT_ITEMS - 2;
+  if (chunkSteps > (long)rmtBufferItems - 2) {
+    chunkSteps = (long)rmtBufferItems - 2;
   }
 
   long totalItems = fillMoveChunk(moveNextStep, chunkSteps, moveTotalSteps, maxSpeedSetting, accelerationSetting);
@@ -498,6 +500,18 @@ void IRAM_ATTR rmt_tx_end_callback(rmt_channel_t channel, void *arg) {
 void setup() {
   Serial.begin(115200);
   delay(300);
+
+  rmtItems = (rmt_item32_t *)heap_caps_malloc(RMT_BUFFER_ITEMS * sizeof(rmt_item32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (rmtItems == nullptr) {
+    rmtItems = (rmt_item32_t *)malloc(RMT_BUFFER_ITEMS * sizeof(rmt_item32_t));
+  }
+  if (rmtItems == nullptr) {
+    Serial.println("RMT buffer alloc failed");
+    while (true) {
+      delay(1000);
+    }
+  }
+  rmtBufferItems = RMT_BUFFER_ITEMS;
 
   Wire.begin();
   lcd.init();
