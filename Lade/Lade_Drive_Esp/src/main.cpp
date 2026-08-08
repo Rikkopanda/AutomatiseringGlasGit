@@ -5,27 +5,27 @@
 // ================== PINS ==================
 #define PIN_STEP      14
 #define PIN_DIR       12
-#define PIN_ENABLE    21
+#define PIN_ENABLE    27
 #define PIN_LIMIT_L   4
 #define PIN_LIMIT_R   5
 #define PIN_BTN_LEFT  12
 #define PIN_BTN_RIGHT 13
 #define PIN_BTN_HOME  14
 #define PIN_POT       34
-#define USE_ENABLE_PIN 0    // 1 = physical enable wire used, 0 = no enable pin on drive
+#define USE_ENABLE_PIN 1    // 1 = physical enable wire used, 0 = no enable pin on drive
 #define ENABLE_ACTIVE_LOW 1   // 1: ENABLE low = ON (common), 0: ENABLE high = ON
 #define USE_BUTTONS   0   // 1 = buttons installed, 0 = serial only
 #define USE_SERIAL_STEPS 1   // 1 = via serial, 0 = via potmeter
 
 // ================== PARAMETERS ==================
-const float MAX_SPEED    = 5000.0f;   // steps/sec
-const float ACCELERATION = 12000.0f;  // steps/sec²
+const float MAX_SPEED    = 42000.0f;   // steps/sec
+const float ACCELERATION = 22000.0f;  // steps/sec²
 const uint32_t PULSE_US  = 5;         // pulse breedte (5 us is usually safer for servo/driver inputs)
 
 // ================== RMT ==================
 #define RMT_CH          RMT_CHANNEL_0
 #define RMT_DIV         80            // 1 µs tick
-#define MAX_RMT_ITEMS   512           // max items per buffer (pas aan indien nodig)
+#define MAX_RMT_ITEMS   200048           // max items per buffer (pas aan indien nodig)
 
 rmt_item32_t rmtItems[MAX_RMT_ITEMS];
 
@@ -45,7 +45,7 @@ long manualSteps = 1000;
 
 // ================== SERIAL COMMANDS ==================
 void printSerialHelp() {
-  Serial.println("Commands: steps=<300-6000>, move=<steps>, left/right, <n> r|l, time=<steps>, cont=<hz>, stop, pos=<waarde>, help");
+  Serial.println("Commands: steps=<300-6000>, move=<steps>, left/right, <n> r|l, time=<steps>, cont=<hz>, stop, enable, disable, pos=<waarde>, help");
 }
 
 void runMove(long steps, const char *label) {
@@ -88,9 +88,21 @@ void handleSerialCommand() {
     return;
   }
 
+  if (command == "enable" || command == "on") {
+    setDriveEnabled(true);
+    Serial.println("Drive enabled");
+    return;
+  }
+
+  if (command == "disable" || command == "off") {
+    stopMotion();
+    Serial.println("Drive disabled");
+    return;
+  }
+
   if (command.startsWith("steps=")) {
     long value = command.substring(6).toInt();
-    manualSteps = constrain(value, 300, 6000);
+    manualSteps = constrain(value, 300, 60000);
     Serial.printf("Steps ingesteld op %ld\n", manualSteps);
     return;
   }
@@ -156,7 +168,7 @@ void handleSerialCommand() {
 
   long value = command.toInt();
   if (value > 0) {
-    manualSteps = constrain(value, 300, 6000);
+    manualSteps = constrain(value, 300, 60000);
     Serial.printf("Steps ingesteld op %ld\n", manualSteps);
     return;
   }
@@ -251,7 +263,7 @@ void stopMotion() {
 void setDriveEnabled(bool enabled) {
 #if USE_ENABLE_PIN
 #if ENABLE_ACTIVE_LOW
-  digitalWrite(PIN_ENABLE, enabled ? LOW : HIGH);
+  digitalWrite(PIN_ENABLE, enabled ? HIGH : LOW);
 #else
   digitalWrite(PIN_ENABLE, enabled ? HIGH : LOW);
 #endif
@@ -355,6 +367,7 @@ void IRAM_ATTR rmt_tx_end_callback(rmt_channel_t channel, void *arg) {
   (void)channel;
   (void)arg;
   isMoving = false;
+  setDriveEnabled(false);
 }
 
 // ================== SETUP ==================
@@ -389,9 +402,10 @@ void setup() {
   Serial.println("T6 – Volledige RMT buffer versie klaar");
 #if USE_SERIAL_STEPS
   printSerialHelp();
-  Serial.printf("Enable pin: %s\n", USE_ENABLE_PIN ? "enabled" : "not used");
+  Serial.printf("Enable pin: %s on GPIO %d\n", USE_ENABLE_PIN ? "enabled" : "not used", PIN_ENABLE);
 #if USE_ENABLE_PIN
   Serial.printf("Enable polarity: active-%s\n", ENABLE_ACTIVE_LOW ? "LOW" : "HIGH");
+  Serial.println("Drive starts disabled. Use 'enable' before testing motion, 'stop' to stop and disable.");
 #endif
 #endif
 }
