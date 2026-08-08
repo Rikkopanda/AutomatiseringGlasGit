@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include "driver/rmt.h"
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 #include <vector>
 
 // ================== PINS ==================
@@ -18,14 +20,21 @@
 #define USE_SERIAL_STEPS 1   // 1 = via serial, 0 = via potmeter
 
 // ================== PARAMETERS ==================
-const float MAX_SPEED    = 42000.0f;   // steps/sec
-const float ACCELERATION = 22000.0f;  // steps/sec²
+const float DEFAULT_MAX_SPEED    = 42000.0f;   // steps/sec
+const float DEFAULT_ACCELERATION = 22000.0f;   // steps/sec²
 const uint32_t PULSE_US  = 5;         // pulse breedte (5 us is usually safer for servo/driver inputs)
+float maxSpeedSetting = DEFAULT_MAX_SPEED;
+float accelerationSetting = DEFAULT_ACCELERATION;
+
+#define LCD_I2C_ADDR   0x27
+#define LCD_COLS       16
+#define LCD_ROWS       2
+#define LCD_UPDATE_MS  300
 
 // ================== RMT ==================
 #define RMT_CH          RMT_CHANNEL_0
 #define RMT_DIV         80            // 1 µs tick
-#define MAX_RMT_ITEMS   200048           // max items per buffer (pas aan indien nodig)
+#define MAX_RMT_ITEMS   4096             // max items per buffer (fits ESP32 DRAM much better)
 
 rmt_item32_t rmtItems[MAX_RMT_ITEMS];
 
@@ -33,19 +42,57 @@ rmt_item32_t rmtItems[MAX_RMT_ITEMS];
 volatile long currentPos = 0;
 bool isMoving = false;
 bool isContinuous = false;
+bool driveEnabled = false;
+bool lcdReady = false;
+unsigned long lastLcdUpdate = 0;
+
+LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 
 bool prepareMove(long steps);
 float estimateMoveMs(long steps, long *plannedPulses = nullptr);
 bool startContinuousTest(long signedHz);
 void stopMotion();
 void setDriveEnabled(bool enabled);
+void updateLcdStatus(bool force = false);
 
 #if USE_SERIAL_STEPS
 long manualSteps = 1000;
+void printStatus();
 
 // ================== SERIAL COMMANDS ==================
 void printSerialHelp() {
-  Serial.println("Commands: steps=<300-6000>, move=<steps>, left/right, <n> r|l, time=<steps>, cont=<hz>, stop, enable, disable, pos=<waarde>, help");
+  Serial.println("Commands: steps=<300-60000>, speed=<100-200000>, accel=<100-500000>, move=<steps>, left/right, <n> r|l, time=<steps>, cont=<hz>, stop, enable, disable, status, menu, pos=<waarde>, help");
+}
+
+void printStatus() {
+  Serial.printf("Status | pos=%ld moving=%s cont=%s drive=%s speed=%.1f accel=%.1f steps=%ld\n",
+                currentPos,
+                isMoving ? "JA" : "nee",
+                isContinuous ? "JA" : "nee",
+                driveEnabled ? "AAN" : "uit",
+                maxSpeedSetting,
+                accelerationSetting,
+                manualSteps);
+}
+
+void updateLcdStatus(bool force) {
+  if (!lcdReady) return;
+  if (!force && (millis() - lastLcdUpdate) < LCD_UPDATE_MS) return;
+  lastLcdUpdate = millis();
+
+  char line1[17];
+  char line2[17];
+  snprintf(line1, sizeof(line1), "P:%ld M:%c C:%c", currentPos, isMoving ? 'Y' : 'N', isContinuous ? 'Y' : 'N');
+  snprintf(line2, sizeof(line2), "V:%5.0f A:%5.0f", maxSpeedSetting, accelerationSetting);
+
+  lcd.setCursor(0, 0);
+  lcd.print("                ");
+  lcd.setCursor(0, 0);
+  lcd.print(line1);
+  lcd.setCursor(0, 1);
+  lcd.print("                ");
+  lcd.setCursor(0, 1);
+  lcd.print(line2);
 }
 
 void runMove(long steps, const char *label) {
@@ -83,6 +130,17 @@ void handleSerialCommand() {
     return;
   }
 
+  if (command == "menu") {
+    printSerialHelp();
+    printStatus();
+    return;
+  }
+
+  if (command == "status" || command == "tab") {
+    printStatus();
+    return;
+  }
+
   if (command == "stop") {
     stopMotion();
     return;
@@ -104,6 +162,28 @@ void handleSerialCommand() {
     long value = command.substring(6).toInt();
     manualSteps = constrain(value, 300, 60000);
     Serial.printf("Steps ingesteld op %ld\n", manualSteps);
+    printStatus();
+    return;
+  }
+
+  if (command.startsWith("speed=")) {
+    long value = command.substring(6).toInt();
+    if (value > 0) {
+      maxSpeedSetting = constrain(value, 100, 200000);
+      Serial.printf("Speed ingesteld op %.1f steps/s\n", maxSpeedSetting);
+      printStatus();
+      return;
+    }
+  }
+
+  if (command.startsWith("accel=")) {
+    long value = command.substring(6).toInt();
+    if (value > 0) {
+      accelerationSetting = constrain(value, 100, 500000);
+      Serial.printf("Accel ingesteld op %.1f steps/s^2\n", accelerationSetting);
+      printStatus();
+      return;
+    }
     return;
   }
 
@@ -182,8 +262,8 @@ float estimateMoveMs(long steps, long *plannedPulses) {
   if (steps == 0) return 0.0f;
 
   long absSteps = labs(steps);
-  float maxSpeed = MAX_SPEED;
-  float accel = ACCELERATION;
+  float maxSpeed = maxSpeedSetting;
+  float accel = accelerationSetting;
   long accelSteps = (long)((maxSpeed * maxSpeed) / (2.0f * accel));
   if (accelSteps * 2 > absSteps) {
     accelSteps = absSteps / 2;
@@ -261,6 +341,7 @@ void stopMotion() {
 }
 
 void setDriveEnabled(bool enabled) {
+  driveEnabled = enabled;
 #if USE_ENABLE_PIN
 #if ENABLE_ACTIVE_LOW
   digitalWrite(PIN_ENABLE, enabled ? HIGH : LOW);
@@ -300,8 +381,8 @@ bool prepareMove(long steps) {
   delayMicroseconds(10);
 
   // Bereken aantal stappen voor accel/decel
-  float maxSpeed = MAX_SPEED;
-  float accel = ACCELERATION;
+  float maxSpeed = maxSpeedSetting;
+  float accel = accelerationSetting;
 
   // s = v² / (2a)
   long accelSteps = (long)((maxSpeed * maxSpeed) / (2.0f * accel));
@@ -375,6 +456,16 @@ void setup() {
   Serial.begin(115200);
   delay(300);
 
+  Wire.begin();
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("T6 Drive Ready");
+  lcd.setCursor(0, 1);
+  lcd.print("I2C:0x27");
+  lcdReady = true;
+
   pinMode(PIN_DIR, OUTPUT);
   
 #if USE_ENABLE_PIN
@@ -402,6 +493,7 @@ void setup() {
   Serial.println("T6 – Volledige RMT buffer versie klaar");
 #if USE_SERIAL_STEPS
   printSerialHelp();
+  printStatus();
   Serial.printf("Enable pin: %s on GPIO %d\n", USE_ENABLE_PIN ? "enabled" : "not used", PIN_ENABLE);
 #if USE_ENABLE_PIN
   Serial.printf("Enable polarity: active-%s\n", ENABLE_ACTIVE_LOW ? "LOW" : "HIGH");
@@ -415,6 +507,8 @@ void loop() {
 #if USE_SERIAL_STEPS
   handleSerialCommand();
 #endif
+
+  updateLcdStatus(false);
 
 #if USE_BUTTONS
   // Limits controleren tijdens beweging
