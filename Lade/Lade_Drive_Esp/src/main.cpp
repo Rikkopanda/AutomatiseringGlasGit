@@ -45,6 +45,11 @@ bool isContinuous = false;
 bool driveEnabled = false;
 bool lcdReady = false;
 unsigned long lastLcdUpdate = 0;
+volatile bool moveChunkDone = false;
+bool moveActive = false;
+long moveTotalSteps = 0;
+long moveNextStep = 0;
+bool moveDirPositive = true;
 
 LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 
@@ -95,20 +100,104 @@ void updateLcdStatus(bool force) {
   lcd.print(line2);
 }
 
+uint32_t stepPeriodUsForIndex(long stepIndex, long totalSteps, float maxSpeed, float accel) {
+  long accelSteps = (long)((maxSpeed * maxSpeed) / (2.0f * accel));
+  if (accelSteps * 2 > totalSteps) {
+    accelSteps = totalSteps / 2;
+    maxSpeed = sqrtf(2.0f * accel * accelSteps);
+  }
+
+  long constSteps = totalSteps - 2 * accelSteps;
+  float speed;
+
+  if (stepIndex < accelSteps) {
+    speed = sqrtf(2.0f * accel * (stepIndex + 1));
+  } else if (stepIndex < (accelSteps + constSteps)) {
+    speed = maxSpeed;
+  } else {
+    long decelIndex = totalSteps - stepIndex;
+    speed = sqrtf(2.0f * accel * decelIndex);
+  }
+
+  if (speed < 50.0f) speed = 50.0f;
+  uint32_t period = (uint32_t)(1000000.0f / speed);
+  if (period <= PULSE_US) {
+    period = PULSE_US + 1;
+  }
+  return period;
+}
+
+long fillMoveChunk(long startStep, long chunkSteps, long totalSteps, float maxSpeed, float accel) {
+  long totalItems = 0;
+  long endStep = startStep + chunkSteps;
+
+  for (long stepIndex = startStep; stepIndex < endStep && totalItems < MAX_RMT_ITEMS - 2; ++stepIndex) {
+    uint32_t period = stepPeriodUsForIndex(stepIndex, totalSteps, maxSpeed, accel);
+
+    rmtItems[totalItems].level0 = 1;
+    rmtItems[totalItems].duration0 = PULSE_US;
+    rmtItems[totalItems].level1 = 0;
+    rmtItems[totalItems].duration1 = period - PULSE_US;
+    totalItems++;
+  }
+
+  if (totalItems > 0 && endStep >= totalSteps) {
+    rmtItems[totalItems - 1].duration1 = 10;
+  }
+
+  return totalItems;
+}
+
+bool queueNextMoveChunk() {
+  if (!moveActive) return false;
+
+  long remaining = moveTotalSteps - moveNextStep;
+  if (remaining <= 0) return false;
+
+  long chunkSteps = remaining;
+  if (chunkSteps > (MAX_RMT_ITEMS - 2)) {
+    chunkSteps = MAX_RMT_ITEMS - 2;
+  }
+
+  long totalItems = fillMoveChunk(moveNextStep, chunkSteps, moveTotalSteps, maxSpeedSetting, accelerationSetting);
+  if (totalItems <= 0) return false;
+
+  moveNextStep += chunkSteps;
+  rmt_write_items(RMT_CH, rmtItems, totalItems, false);
+  return true;
+}
+
+void serviceMoveChunks() {
+  if (!moveActive || isContinuous) return;
+  if (!moveChunkDone) return;
+
+  moveChunkDone = false;
+
+  if (moveNextStep >= moveTotalSteps) {
+    moveActive = false;
+    isMoving = false;
+    setDriveEnabled(false);
+    Serial.println("Move finished");
+    return;
+  }
+
+  if (!queueNextMoveChunk()) {
+    moveActive = false;
+    isMoving = false;
+    setDriveEnabled(false);
+    Serial.println("Move chunk failed");
+  }
+}
+
 void runMove(long steps, const char *label) {
   if (isMoving || isContinuous) {
     Serial.println("Motor is al bezig");
     return;
   }
 
-  setDriveEnabled(true);
-
   long plannedPulses = 0;
   float estMs = estimateMoveMs(steps, &plannedPulses);
   Serial.printf("Plan: %ld pulses, %.1f ms\n", plannedPulses, estMs);
-  if (plannedPulses < labs(steps)) {
-    Serial.printf("Let op: gevraagd=%ld, buffer kan max %ld pulses per move\n", labs(steps), plannedPulses);
-  }
 
   if (prepareMove(steps)) {
     currentPos += steps;
@@ -271,28 +360,23 @@ float estimateMoveMs(long steps, long *plannedPulses) {
   }
 
   long constSteps = absSteps - 2 * accelSteps;
-  long maxItems = MAX_RMT_ITEMS - 2;
-  long totalItems = 0;
   double totalUs = 0.0;
 
-  for (long i = 1; i <= accelSteps && totalItems < maxItems; i++) {
+  for (long i = 1; i <= accelSteps; i++) {
     float speed = sqrtf(2.0f * accel * i);
     if (speed < 50) speed = 50;
     totalUs += (1000000.0 / speed);
-    totalItems++;
   }
-  for (long i = 0; i < constSteps && totalItems < maxItems; i++) {
+  for (long i = 0; i < constSteps; i++) {
     totalUs += (1000000.0 / maxSpeed);
-    totalItems++;
   }
-  for (long i = accelSteps; i >= 1 && totalItems < maxItems; i--) {
+  for (long i = accelSteps; i >= 1; i--) {
     float speed = sqrtf(2.0f * accel * i);
     if (speed < 50) speed = 50;
     totalUs += (1000000.0 / speed);
-    totalItems++;
   }
 
-  if (plannedPulses) *plannedPulses = totalItems;
+  if (plannedPulses) *plannedPulses = absSteps;
   return (float)(totalUs / 1000.0);
 }
 
@@ -336,6 +420,10 @@ void stopMotion() {
   rmt_set_tx_loop_mode(RMT_CH, false);
   isMoving = false;
   isContinuous = false;
+  moveActive = false;
+  moveChunkDone = false;
+  moveNextStep = 0;
+  moveTotalSteps = 0;
   setDriveEnabled(false);
   Serial.println("Motion stopped");
 }
@@ -373,73 +461,27 @@ void setupRMT() {
 // ================== BEWEGING BEREKENEN + BUFFER VULLEN ==================
 bool prepareMove(long steps) {
   if (steps == 0) return false;
+  if (isMoving || isContinuous) return false;
 
-  bool dir = steps > 0;
-  long absSteps = abs(steps);
-
-  digitalWrite(PIN_DIR, dir ? HIGH : LOW);
-  delayMicroseconds(10);
-
-  // Bereken aantal stappen voor accel/decel
-  float maxSpeed = maxSpeedSetting;
-  float accel = accelerationSetting;
-
-  // s = v² / (2a)
-  long accelSteps = (long)((maxSpeed * maxSpeed) / (2.0f * accel));
-  if (accelSteps * 2 > absSteps) {
-    // Korte beweging → driehoek-profiel
-    accelSteps = absSteps / 2;
-    maxSpeed = sqrtf(2.0f * accel * accelSteps);
-  }
-
-  long constSteps = absSteps - 2 * accelSteps;
-  long totalItems = 0;
-
-  // --- Accel fase ---
-  for (long i = 1; i <= accelSteps && totalItems < MAX_RMT_ITEMS - 2; i++) {
-    float speed = sqrtf(2.0f * accel * i);
-    if (speed < 50) speed = 50;
-    uint32_t period = (uint32_t)(1000000.0f / speed);
-
-    rmtItems[totalItems].level0 = 1;
-    rmtItems[totalItems].duration0 = PULSE_US;
-    rmtItems[totalItems].level1 = 0;
-    rmtItems[totalItems].duration1 = period - PULSE_US;
-    totalItems++;
-  }
-
-  // --- Constante snelheid ---
-  uint32_t constPeriod = (uint32_t)(1000000.0f / maxSpeed);
-  for (long i = 0; i < constSteps && totalItems < MAX_RMT_ITEMS - 2; i++) {
-    rmtItems[totalItems].level0 = 1;
-    rmtItems[totalItems].duration0 = PULSE_US;
-    rmtItems[totalItems].level1 = 0;
-    rmtItems[totalItems].duration1 = constPeriod - PULSE_US;
-    totalItems++;
-  }
-
-  // --- Decel fase ---
-  for (long i = accelSteps; i >= 1 && totalItems < MAX_RMT_ITEMS - 2; i--) {
-    float speed = sqrtf(2.0f * accel * i);
-    if (speed < 50) speed = 50;
-    uint32_t period = (uint32_t)(1000000.0f / speed);
-
-    rmtItems[totalItems].level0 = 1;
-    rmtItems[totalItems].duration0 = PULSE_US;
-    rmtItems[totalItems].level1 = 0;
-    rmtItems[totalItems].duration1 = period - PULSE_US;
-    totalItems++;
-  }
-
-  if (totalItems == 0) return false;
-
-  // Laatste item afsluiten
-  rmtItems[totalItems - 1].duration1 = 10;
-
-  // Buffer naar RMT sturen
-  rmt_write_items(RMT_CH, rmtItems, totalItems, false);  // non-blocking
-  Serial.printf("isMoving!\n");
+  moveDirPositive = steps > 0;
+  moveTotalSteps = labs(steps);
+  moveNextStep = 0;
+  moveChunkDone = false;
+  moveActive = true;
   isMoving = true;
+
+  digitalWrite(PIN_DIR, moveDirPositive ? HIGH : LOW);
+  delayMicroseconds(10);
+  setDriveEnabled(true);
+
+  if (!queueNextMoveChunk()) {
+    moveActive = false;
+    isMoving = false;
+    setDriveEnabled(false);
+    return false;
+  }
+
+  Serial.printf("isMoving!\n");
   return true;
 }
 
@@ -447,8 +489,9 @@ bool prepareMove(long steps) {
 void IRAM_ATTR rmt_tx_end_callback(rmt_channel_t channel, void *arg) {
   (void)channel;
   (void)arg;
-  isMoving = false;
-  setDriveEnabled(false);
+  if (moveActive && !isContinuous) {
+    moveChunkDone = true;
+  }
 }
 
 // ================== SETUP ==================
@@ -507,6 +550,8 @@ void loop() {
 #if USE_SERIAL_STEPS
   handleSerialCommand();
 #endif
+
+  serviceMoveChunks();
 
   updateLcdStatus(false);
 
