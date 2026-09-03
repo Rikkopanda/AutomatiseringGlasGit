@@ -1,23 +1,31 @@
 #include <Arduino.h>
 #include "driver/rmt.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <Preferences.h>
 #include <vector>
 
 // ================== PINS ==================
 #define PIN_STEP      14
 #define PIN_DIR       12
 #define PIN_ENABLE    27
-#define PIN_LIMIT_L   4
-#define PIN_LIMIT_R   5
+#define PIN_NAV_NEXT  4
+#define PIN_NAV_PREV  5
+#define PIN_HOME_LIMIT 15  // home switch, reached while moving positive
+#define PIN_LEFTOVER 16  // RX2
+#define PIN_END_LIMIT_1  17  // TX2: far-end switch, reached while moving positive
+#define PIN_END_LIMIT_0  2   // D2: oven-side end switch, reached while moving negative
+
 #define PIN_POT_SPEED 34
 #define PIN_POT_ACCEL 35
-#define LIMIT_SWITCH_NORMALLY_CLOSED 1 // recommended: an open/broken wire stops motion
 #define DEBUG_INPUTS 1                 // set to 0 to silence keypad/pot/limit diagnostics
-constexpr uint32_t LIMIT_DEBOUNCE_MS = 50;
+constexpr uint32_t BUTTON_DEBOUNCE_MS = 50;
+constexpr long MAX_STORED_POSITION = 10000000L;
+constexpr long HOME_SEARCH_MAX_STEPS = 10000000L;
 #define USE_ENABLE_PIN 1    // 1 = physical enable wire used, 0 = no enable pin on drive
 #define ENABLE_ACTIVE_LOW 1   // 1: ENABLE low = ON (common), 0: ENABLE high = ON
 #define USE_SERIAL_STEPS 1   // 1 = via serial, 0 = via potmeter
@@ -72,6 +80,9 @@ bool moveActive = false;
 long moveTotalSteps = 0;
 long moveNextStep = 0;
 bool moveDirPositive = true;
+long activeMoveSteps = 0;
+bool homingInProgress = false;
+bool positionKnown = true;
 TaskHandle_t moveServiceTaskHandle = nullptr;
 String keypadNumber;
 char lastKey = '\0';
@@ -79,13 +90,21 @@ char keypadCandidate = '\0';
 unsigned long keypadCandidateSinceMs = 0;
 unsigned long lastPotReadMs = 0;
 
-struct DebouncedLimit {
-  bool stable = true;       // safe state until the input has been sampled
-  bool candidate = true;
+struct DebouncedButton {
+  bool stablePressed = false;
+  bool candidatePressed = false;
   unsigned long candidateSinceMs = 0;
 };
-DebouncedLimit leftLimit;
-DebouncedLimit rightLimit;
+DebouncedButton nextButton;
+DebouncedButton prevButton;
+
+enum UiScreen { UI_HOME, UI_SELECT_POSITION, UI_EDIT_POSITION };
+UiScreen uiScreen = UI_HOME;
+long savedPositions[4] = {0, 0, 0, 0};
+uint8_t selectedPosition = 0;
+uint8_t editPosition = 0;
+String editValue;
+Preferences preferences;
 
 LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 
@@ -96,14 +115,19 @@ void stopMotion();
 void setDriveEnabled(bool enabled);
 void updateLcdStatus(bool force = false);
 void moveServiceTask(void *param);
-bool leftLimitActive();
-bool rightLimitActive();
-bool limitBlocksDirection(bool positive);
-void stopForLimit(const char *which);
-void updateLimitSwitches();
+void updateNavigationButtons();
+bool updateOneButton(DebouncedButton &button, uint8_t pin);
+void loadPositions();
+void savePosition(uint8_t index, long value);
+void goToSelectedPosition();
 char readKeypad();
 void handleKeypad();
 void updatePotSettings();
+bool isHomeLimitPressed();
+bool isEndLimit0Pressed();
+bool isEndLimit1Pressed();
+void processLimitSwitches();
+bool startHoming();
 void debugLimitSwitches();
 
 #if USE_SERIAL_STEPS
@@ -112,19 +136,24 @@ void printStatus();
 
 // ================== SERIAL COMMANDS ==================
 void printSerialHelp() {
-  Serial.println("Keypad: digits=distance, #=save, A=right, B=left, C=zero at left limit, D=stop, *=clear");
-  Serial.println("Commands: steps=<300-60000>, speed=<100-200000>, accel=<100-500000>, move=<steps>, left/right, <n> r|l, time=<steps>, cont=<hz>, stop, enable, disable, status, menu, pos=<waarde>, help");
+  Serial.println("Keypad menu: Home A=edit/C=go; select A/B=position/C=edit; edit digits, *=clear, #=save, D=back.");
+  Serial.println("GPIO4=next stored position, GPIO5=previous stored position.");
+  Serial.println("Commands: steps=<300-60000>, speed=<100-200000>, accel=<100-500000>, move=<steps>, left/right, <n> r|l, home, time=<steps>, cont=<hz>, stop, enable, disable, status, menu, pos=<waarde>, help");
 }
 
 void printStatus() {
-  Serial.printf("Status | pos=%ld moving=%s cont=%s drive=%s speed=%.1f accel=%.1f steps=%ld\n",
+  Serial.printf("Status | pos=%ld (%s) moving=%s cont=%s drive=%s speed=%.1f accel=%.1f steps=%ld | end0=%s home=%s end1=%s\n",
                 currentPos,
+                positionKnown ? "known" : "unknown",
                 isMoving ? "JA" : "nee",
                 isContinuous ? "JA" : "nee",
                 driveEnabled ? "AAN" : "uit",
                 maxSpeedSetting,
                 accelerationSetting,
-                manualSteps);
+                manualSteps,
+                isEndLimit0Pressed() ? "PRESSED" : "open",
+                isHomeLimitPressed() ? "PRESSED" : "open",
+                isEndLimit1Pressed() ? "PRESSED" : "open");
 }
 
 void updateLcdStatus(bool force) {
@@ -134,8 +163,16 @@ void updateLcdStatus(bool force) {
 
   char line1[17];
   char line2[17];
-  snprintf(line1, sizeof(line1), "P:%ld M:%c C:%c", currentPos, isMoving ? 'Y' : 'N', isContinuous ? 'Y' : 'N');
-  snprintf(line2, sizeof(line2), "V:%5.0f A:%5.0f", maxSpeedSetting, accelerationSetting);
+  if (uiScreen == UI_HOME) {
+    snprintf(line1, sizeof(line1), "P%u Cur:%ld", selectedPosition, currentPos);
+    snprintf(line2, sizeof(line2), "A:Edit C:Go");
+  } else if (uiScreen == UI_SELECT_POSITION) {
+    snprintf(line1, sizeof(line1), "Select P%u=%ld", editPosition, savedPositions[editPosition]);
+    snprintf(line2, sizeof(line2), "A/B Sel C:Edit");
+  } else {
+    snprintf(line1, sizeof(line1), "Edit P%u (steps)", editPosition);
+    snprintf(line2, sizeof(line2), "%s #=Save D=Back", editValue.c_str());
+  }
 
   lcd.setCursor(0, 0);
   lcd.print("                ");
@@ -221,10 +258,19 @@ void serviceMoveChunks() {
   moveChunkDone = false;
 
   if (moveNextStep >= moveTotalSteps) {
+    bool wasHoming = homingInProgress;
     moveActive = false;
     isMoving = false;
     setDriveEnabled(false);
-    Serial.println("Move finished");
+    if (wasHoming) {
+      homingInProgress = false;
+      positionKnown = false;
+      Serial.println("Home search failed: switch was not reached");
+    } else {
+      currentPos += activeMoveSteps;
+      Serial.println("Move finished");
+    }
+    activeMoveSteps = 0;
     return;
   }
 
@@ -255,9 +301,11 @@ void runMove(long steps, const char *label) {
   float estMs = estimateMoveMs(steps, &plannedPulses);
   Serial.printf("Plan: %ld pulses, %.1f ms\n", plannedPulses, estMs);
 
+  activeMoveSteps = steps;
   if (prepareMove(steps)) {
-    currentPos += steps;
     Serial.printf("%s %ld steps\n", label, labs(steps));
+  } else {
+    activeMoveSteps = 0;
   }
 }
 
@@ -285,6 +333,11 @@ void processSerialCommand(String command) {
 
   if (command == "stop") {
     stopMotion();
+    return;
+  }
+
+  if (command == "home") {
+    startHoming();
     return;
   }
 
@@ -466,8 +519,9 @@ bool startContinuousTest(long signedHz) {
   long hz = labs(signedHz);
   hz = constrain(hz, 10, 200000);
   bool dir = signedHz > 0;
-  if (limitBlocksDirection(dir)) {
-    Serial.println("Continuous move refused: limit switch is active");
+  if ((dir && (isHomeLimitPressed() || isEndLimit1Pressed())) ||
+      (!dir && isEndLimit0Pressed())) {
+    Serial.println("Continuous motion blocked: relevant limit switch is pressed");
     return false;
   }
   moveDirPositive = dir;
@@ -500,8 +554,90 @@ void stopMotion() {
   moveChunkDone = false;
   moveNextStep = 0;
   moveTotalSteps = 0;
+  activeMoveSteps = 0;
+  homingInProgress = false;
   setDriveEnabled(false);
   Serial.println("Motion stopped");
+}
+
+// Both switches are wired from GPIO to GND, so a closed switch reads LOW.
+bool isHomeLimitPressed() {
+  return digitalRead(PIN_HOME_LIMIT) == LOW;
+}
+
+bool isEndLimit0Pressed() {
+  return digitalRead(PIN_END_LIMIT_0) == LOW;
+}
+
+bool isEndLimit1Pressed() {
+  return digitalRead(PIN_END_LIMIT_1) == LOW;
+}
+
+void processLimitSwitches() {
+  if (!isMoving && !isContinuous) return;
+
+  bool hitHome = moveDirPositive && isHomeLimitPressed();
+  bool hitEnd1 = moveDirPositive && isEndLimit1Pressed();
+  bool hitEnd0 = !moveDirPositive && isEndLimit0Pressed();
+  if (!hitHome && !hitEnd0 && !hitEnd1) return;
+
+  bool wasHoming = homingInProgress;
+  stopMotion();
+  homingInProgress = false;
+  if (hitHome) {
+    currentPos = 0;
+    positionKnown = true;
+    Serial.println(wasHoming ? "Home reached: position set to 0" : "Home limit reached: motion stopped, position set to 0");
+  } else {
+    // A stop within an RMT pulse chunk has no exact pulse count, so do not
+    // pretend the software position is still accurate. Run `home` to recover.
+    positionKnown = false;
+    Serial.println(hitEnd0 ? "End limit 0 reached: motion stopped; position unknown, run 'home'"
+                           : "End limit 1 reached: motion stopped; position unknown, run 'home'");
+  }
+}
+
+void debugLimitSwitches() {
+#if DEBUG_INPUTS
+  static int lastEnd0 = -1;
+  static int lastHome = -1;
+  static int lastEnd1 = -1;
+  int end0 = isEndLimit0Pressed();
+  int home = isHomeLimitPressed();
+  int end1 = isEndLimit1Pressed();
+  if (end0 != lastEnd0 || home != lastHome || end1 != lastEnd1) {
+    lastEnd0 = end0;
+    lastHome = home;
+    lastEnd1 = end1;
+    Serial.printf("Limits | end0(GPIO2)=%s home(GPIO15)=%s end1(GPIO17)=%s\n",
+                  end0 ? "PRESSED" : "open",
+                  home ? "PRESSED" : "open",
+                  end1 ? "PRESSED" : "open");
+  }
+#endif
+}
+
+bool startHoming() {
+  if (isMoving || isContinuous) {
+    Serial.println("Cannot home while motion is active");
+    return false;
+  }
+  if (isHomeLimitPressed()) {
+    currentPos = 0;
+    positionKnown = true;
+    Serial.println("Already at home: position set to 0");
+    return true;
+  }
+
+  homingInProgress = true;
+  activeMoveSteps = HOME_SEARCH_MAX_STEPS;
+  if (!prepareMove(HOME_SEARCH_MAX_STEPS)) {
+    homingInProgress = false;
+    activeMoveSteps = 0;
+    return false;
+  }
+  Serial.println("Homing positive toward GPIO16/RX2; send 'stop' to abort");
+  return true;
 }
 
 void setDriveEnabled(bool enabled) {
@@ -517,45 +653,74 @@ void setDriveEnabled(bool enabled) {
 #endif
 }
 
-// Wire each switch between its GPIO and GND. With an NC switch the normal
-// closed circuit reads LOW; a pressed switch or broken wire reads HIGH.
-bool rawLimitActive(uint8_t pin) {
-  bool level = digitalRead(pin) == HIGH;
-  return LIMIT_SWITCH_NORMALLY_CLOSED ? level : !level;
+bool updateOneButton(DebouncedButton &button, uint8_t pin) {
+  bool rawPressed = digitalRead(pin) == LOW; // button wired GPIO to GND
+  if (rawPressed != button.candidatePressed) {
+    button.candidatePressed = rawPressed;
+    button.candidateSinceMs = millis();
+    return false;
+  }
+  if (button.stablePressed != button.candidatePressed &&
+      millis() - button.candidateSinceMs >= BUTTON_DEBOUNCE_MS) {
+    button.stablePressed = button.candidatePressed;
+    return button.stablePressed; // only true once: on the press edge
+  }
+  return false;
 }
 
-void updateOneLimit(DebouncedLimit &limit, bool rawActive) {
-  if (rawActive != limit.candidate) {
-    limit.candidate = rawActive;
-    limit.candidateSinceMs = millis();
+void goToSelectedPosition() {
+  if (isMoving || isContinuous) return;
+  if (!positionKnown) {
+    Serial.println("Position is unknown; run 'home' before using stored positions");
     return;
   }
-  if (limit.stable != limit.candidate &&
-      millis() - limit.candidateSinceMs >= LIMIT_DEBOUNCE_MS) {
-    limit.stable = limit.candidate;
+  long steps = savedPositions[selectedPosition] - currentPos;
+  if (steps == 0) {
+    Serial.printf("Already at position P%u\n", selectedPosition);
+    return;
+  }
+  runMove(steps, "Move to stored position");
+}
+
+void updateNavigationButtons() {
+  if (uiScreen != UI_HOME || isMoving || isContinuous) return;
+  if (updateOneButton(nextButton, PIN_NAV_NEXT)) {
+    if (selectedPosition < 3) {
+      selectedPosition++;
+      Serial.printf("Next position: P%u\n", selectedPosition);
+      goToSelectedPosition();
+    } else {
+      Serial.println("Already at highest position P3");
+    }
+  }
+  if (updateOneButton(prevButton, PIN_NAV_PREV)) {
+    if (selectedPosition > 0) {
+      selectedPosition--;
+      Serial.printf("Previous position: P%u\n", selectedPosition);
+      goToSelectedPosition();
+    } else {
+      Serial.println("Already at lowest position P0");
+    }
   }
 }
 
-void updateLimitSwitches() {
-  updateOneLimit(leftLimit, rawLimitActive(PIN_LIMIT_L));
-  updateOneLimit(rightLimit, rawLimitActive(PIN_LIMIT_R));
+void loadPositions() {
+  preferences.begin("drawer-pos", false);
+  for (uint8_t i = 0; i < 4; ++i) {
+    char key[5];
+    snprintf(key, sizeof(key), "p%u", i);
+    savedPositions[i] = preferences.getLong(key, 0);
+  }
+  // A position tracker has no physical feedback.  Start from the known P0.
+  currentPos = savedPositions[0];
 }
 
-bool leftLimitActive() {
-  return leftLimit.stable;
-}
-
-bool rightLimitActive() {
-  return rightLimit.stable;
-}
-
-bool limitBlocksDirection(bool positive) {
-  return positive ? rightLimitActive() : leftLimitActive();
-}
-
-void stopForLimit(const char *which) {
-  Serial.printf("%s limit active - motion stopped\n", which);
-  stopMotion();
+void savePosition(uint8_t index, long value) {
+  char key[5];
+  snprintf(key, sizeof(key), "p%u", index);
+  savedPositions[index] = value;
+  preferences.putLong(key, value);
+  Serial.printf("Saved P%u = %ld steps\n", index, value);
 }
 
 char readKeypad() {
@@ -590,46 +755,42 @@ void handleKeypad() {
   Serial.printf("Keypad pressed: %c\n", key);
 #endif
 
-  if (key >= '0' && key <= '9') {
-    if (keypadNumber.length() < 7) keypadNumber += key;
-    Serial.printf("Keypad steps: %s\n", keypadNumber.c_str());
-    return;
-  }
-
-  if (key == '*') {
-    keypadNumber = "";
-    Serial.println("Keypad value cleared");
-    return;
-  }
-
   if (key == 'D') {
-    stopMotion();
+    if (uiScreen == UI_HOME) stopMotion();
+    else uiScreen = UI_HOME;
+    updateLcdStatus(true);
     return;
   }
 
-  if (key == 'C') {
-    if (leftLimitActive()) {
-      currentPos = 0;
-      Serial.println("Position set to zero at left limit");
-    } else {
-      Serial.println("Refusing zero: move to the left limit first");
+  if (uiScreen == UI_HOME) {
+    if (key == 'A') {
+      editPosition = selectedPosition;
+      uiScreen = UI_SELECT_POSITION;
+    } else if (key == 'C') {
+      goToSelectedPosition();
     }
-    return;
+  } else if (uiScreen == UI_SELECT_POSITION) {
+    if (key == 'A' && editPosition < 3) editPosition++;
+    else if (key == 'B' && editPosition > 0) editPosition--;
+    else if (key == 'C') {
+      editValue = "";
+      uiScreen = UI_EDIT_POSITION;
+    }
+  } else { // UI_EDIT_POSITION
+    if (key >= '0' && key <= '9') {
+      if (editValue.length() < 8) editValue += key;
+    } else if (key == '*') {
+      editValue = "";
+    } else if (key == '#') {
+      if (editValue.length()) {
+        long value = constrain(editValue.toInt(), 0L, MAX_STORED_POSITION);
+        savePosition(editPosition, value);
+        selectedPosition = editPosition;
+        uiScreen = UI_HOME;
+      }
+    }
   }
-
-  long steps = keypadNumber.length() ? keypadNumber.toInt() : manualSteps;
-  steps = constrain(steps, 1L, 60000L);
-  if (key == '#') {
-    manualSteps = steps;
-    keypadNumber = "";
-    Serial.printf("Step distance set to %ld\n", manualSteps);
-  } else if (key == 'A') {
-    runMove(steps, "Move RIGHT");
-    keypadNumber = "";
-  } else if (key == 'B') {
-    runMove(-steps, "Move LEFT");
-    keypadNumber = "";
-  }
+  updateLcdStatus(true);
 }
 
 void updatePotSettings() {
@@ -663,21 +824,6 @@ void updatePotSettings() {
 #endif
 }
 
-void debugLimitSwitches() {
-#if DEBUG_INPUTS
-  static int lastLeft = -1;
-  static int lastRight = -1;
-  int left = leftLimitActive();
-  int right = rightLimitActive();
-  if (left != lastLeft || right != lastRight) {
-    lastLeft = left;
-    lastRight = right;
-    Serial.printf("Limits: left=%s, right=%s\n",
-                  left ? "ACTIVE" : "clear", right ? "ACTIVE" : "clear");
-  }
-#endif
-}
-
 // ================== RMT INIT ==================
 void setupRMT() {
   rmt_config_t config = {};
@@ -701,8 +847,9 @@ bool prepareMove(long steps) {
   if (isMoving || isContinuous) return false;
 
   moveDirPositive = steps > 0;
-  if (limitBlocksDirection(moveDirPositive)) {
-    Serial.println("Move refused: limit switch is active");
+  if ((moveDirPositive && (isHomeLimitPressed() || isEndLimit1Pressed())) ||
+      (!moveDirPositive && isEndLimit0Pressed())) {
+    Serial.println("Move blocked: relevant limit switch is pressed");
     return false;
   }
   moveTotalSteps = labs(steps);
@@ -745,8 +892,10 @@ void IRAM_ATTR rmt_tx_end_callback(rmt_channel_t channel, void *arg) {
 // ================== SETUP ==================
 void setup() {
   Serial.begin(115200);
-  Serial.setTimeout(10); // never leave a running motor unchecked for a 1 s serial timeout
   delay(300);
+  Serial.println("APP: setup start");
+  Serial.printf("APP: reset reason=%d\n", (int)esp_reset_reason());
+  Serial.flush();
 
   rmtItems = (rmt_item32_t *)heap_caps_malloc(RMT_BUFFER_ITEMS * sizeof(rmt_item32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (rmtItems == nullptr) {
@@ -759,9 +908,19 @@ void setup() {
     }
   }
   rmtBufferItems = RMT_BUFFER_ITEMS;
+  Serial.println("APP: RMT buffer ready");
+  Serial.flush();
 
+  Serial.println("APP: Wire begin");
+  Serial.flush();
   Wire.begin();
+  Serial.println("APP: Wire ready");
+  Serial.flush();
+  Serial.println("APP: LCD init");
+  Serial.flush();
   lcd.init();
+  Serial.println("APP: LCD ready");
+  Serial.flush();
   lcd.backlight();
   lcd.clear();
   lcd.setCursor(0, 0);
@@ -771,8 +930,11 @@ void setup() {
   lcdReady = true;
 
   pinMode(PIN_DIR, OUTPUT);
-  pinMode(PIN_LIMIT_L, INPUT_PULLUP);
-  pinMode(PIN_LIMIT_R, INPUT_PULLUP);
+  pinMode(PIN_NAV_NEXT, INPUT_PULLUP);
+  pinMode(PIN_NAV_PREV, INPUT_PULLUP);
+  pinMode(PIN_HOME_LIMIT, INPUT_PULLUP);
+  pinMode(PIN_END_LIMIT_0, INPUT_PULLUP);
+  pinMode(PIN_END_LIMIT_1, INPUT_PULLUP);
 
   for (uint8_t row = 0; row < 4; ++row) {
     pinMode(KEYPAD_ROWS[row], OUTPUT);
@@ -790,6 +952,7 @@ void setup() {
   analogReadResolution(12);
   analogSetPinAttenuation(PIN_POT_SPEED, ADC_11db);
   analogSetPinAttenuation(PIN_POT_ACCEL, ADC_11db);
+  loadPositions();
 
   setupRMT();
 
@@ -808,7 +971,7 @@ void setup() {
 
   Serial.println("T6 – Volledige RMT buffer versie klaar");
 #if DEBUG_INPUTS
-  Serial.println("Input debug enabled: press a keypad key, turn a pot, or operate a limit switch.");
+  Serial.println("Input debug: GPIO2=end0(-), GPIO15=home(+), GPIO17/TX2=end1(+); switches use INPUT_PULLUP.");
 #endif
 #if USE_SERIAL_STEPS
   printSerialHelp();
@@ -823,13 +986,10 @@ void setup() {
 
 // ================== LOOP ==================
 void loop() {
-  updateLimitSwitches();
-  if ((isMoving || isContinuous) && limitBlocksDirection(moveDirPositive)) {
-    stopForLimit(moveDirPositive ? "RIGHT" : "LEFT");
-  }
-
-  updatePotSettings();
+  processLimitSwitches();
   debugLimitSwitches();
+  updatePotSettings();
+  updateNavigationButtons();
   handleKeypad();
 
 #if USE_SERIAL_STEPS
