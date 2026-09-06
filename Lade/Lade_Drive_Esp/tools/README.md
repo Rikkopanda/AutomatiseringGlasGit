@@ -84,3 +84,32 @@ python3 tools/t6_pr_mode.py disable
 
 Do not run `mbpoll`, this tool, or an ESP32 Modbus master simultaneously on the
 same RS-485 bus: Modbus RTU permits one master.
+
+## Upload and monitor both ESP32 boards
+
+With both USB cables connected, first list the detected ESP32 MAC addresses:
+
+```bash
+python3 tools/dual_esp.py list
+```
+
+Then replace the two MAC values below. The command probes the USB ports, maps
+each MAC to its current `/dev/ttyUSB*` or `/dev/ttyACM*` port, and starts both
+PlatformIO jobs in parallel:
+
+```bash
+python3 tools/dual_esp.py upload \
+  --control-mac AA:BB:CC:DD:EE:01 \
+  --ui-mac AA:BB:CC:DD:EE:02
+```
+
+To open both serial monitors at the same time:
+
+```bash
+python3 tools/dual_esp.py monitor \
+  --control-mac AA:BB:CC:DD:EE:01 \
+  --ui-mac AA:BB:CC:DD:EE:02
+```
+
+Press Ctrl+C once to stop both monitors. MAC selection is performed by
+esptool, so changing USB port order does not select the wrong ESP32.
