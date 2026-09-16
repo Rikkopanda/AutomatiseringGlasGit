@@ -30,7 +30,7 @@ unsigned long lastDisplayUpdate = 0;
 const unsigned long DISPLAY_UPDATE_INTERVAL_MS = 300;
 
 unsigned long lastSerialReport = 0;
-const unsigned long SERIAL_REPORT_INTERVAL_MS = 5000;
+const unsigned long SERIAL_REPORT_INTERVAL_MS = 1000;
 
 // ============================================================================
 // INPUT HANDLERS
@@ -145,6 +145,7 @@ static void updateDisplay() {
 // ============================================================================
 // SETUP
 // ============================================================================
+static long long best_lang;
 
 void setup() {
   Serial.begin(115200);
@@ -158,23 +159,32 @@ void setup() {
   Serial.println();
   
   // Initialize all input devices
-  Serial.println("Initializing devices...");
+  Serial.println("[SETUP] Initializing devices...");
   
+  Serial.println("[SETUP] LCD init...");
   lcdInit();
-  // encoderInit();
+  Serial.println("[SETUP] LCD done");
+
+  Serial.println("[SETUP] Button init...");
   buttonInit();
+  Serial.println("[SETUP] Button done");
+  
+  encoderInit();
   
   // Initialize Modbus slave
-  // modbusSlaveInit();
+  modbusSlaveInit();
   
-  Serial.println("Setup complete!");
+  Serial.println("[SETUP] Setup complete!");
   Serial.println();
+  best_lang = 0;
+  // lcdClear();
 }
 
 // ============================================================================
 // MAIN LOOP
 // ============================================================================
 
+char str[32];
 void loop() {
   // ---- Modbus slave communication ----
   modbusSlaveTask();
@@ -191,14 +201,17 @@ void loop() {
   lcdTask();
   updateDisplay();
   
+  best_lang += 1;
   // ---- Periodic diagnostics ----
-  if (millis() - lastSerialReport > SERIAL_REPORT_INTERVAL_MS) {
+  if (millis() - lastSerialReport > 1000) {
     lastSerialReport = millis();
     
+    // sprintf(str, "%d", best_lang);
+    // printlcd(str);
     Serial.printf("[UI] State: setpoint=%u run=%u master=%s\n",
                   currentSetpoint, currentRun,
                   modbusSlaveHasActiveMaster() ? "OK" : "LOST");
   }
   
-  delay(5); // Small delay to avoid hogging CPU
+  delay(10); // Small delay to avoid hogging CPU
 }

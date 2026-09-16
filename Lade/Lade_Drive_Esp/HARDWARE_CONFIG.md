@@ -38,16 +38,16 @@
 #### Main Encoder (Speed Control)
 | Signal | GPIO | Purpose |
 |--------|------|---------|
-| CLK | 17 | Quadrature Clock |
+| CLK | 18 | Quadrature Clock |
 | DT | 4 | Quadrature Data |
 | Button | 15 | Encoder push button (active-low) |
 
 #### Secondary Encoder (Reserved for future)
 | Signal | GPIO | Purpose |
 |--------|------|---------|
-| CLK | 16 | Quadrature Clock |
-| DT | 18 | Quadrature Data |
-| Button | 5 | Encoder push button (active-low) |
+| CLK | 25 | Quadrature Clock |
+| DT | 5 | Quadrature Data |
+| Button | 2 | Encoder push button (active-low) |
 
 ### Button Panel (7 Buttons with Integrated LEDs)
 | Button # | Button GPIO | Purpose |
@@ -113,15 +113,15 @@ GND ──────────────> GND
 ### Encoder Wiring (with internal pull-ups on button pins)
 ```
 Main Encoder (Speed Control):
-GPIO17 (CLK) ──────> A (CLK)
+GPIO18 (CLK) ──────> A (CLK)
 GPIO4 (DT) ────────> B (DT)
-GPIO15 (SW) ──────> Button (pulled HIGH via 10kΩ resistor)
+GPIO15 (SW) ──────> Button (active-low)
 GND ──────────────> GND
 
 Secondary Encoder:
-GPIO16 (CLK) ──────> A (CLK)
-GPIO18 (DT) ──────> B (DT)
-GPIO5 (SW) ──────> Button (pulled HIGH via 10kΩ resistor)
+GPIO25 (CLK) ──────> A (CLK)
+GPIO5 (DT) ────────> B (DT)
+GPIO2 (SW) ───────> Button (active-low)
 GND ──────────────> GND
 ```
 

@@ -21,10 +21,10 @@ static unsigned long lastMasterContact = 0;
 // ============================================================================
 
 void modbusSlaveInit() {
-  // Use Serial (UART0) with GPIO1 (TXD) and GPIO3 (RXD)
-  Serial.begin(MODBUS_BAUDRATE, MODBUS_SERIAL_CFG, UI_SERIAL_RXD, UI_SERIAL_TXD);
+  // Use Serial2 (UART2) on dedicated pins so USB Serial (UART0) remains for 115200 debug
+  Serial2.begin(MODBUS_BAUDRATE, MODBUS_SERIAL_CFG, UI_SERIAL_RXD, UI_SERIAL_TXD);
   
-  mb.begin(&Serial, -1); // -1 = no direction pin, auto-direction on RS-485 adapter
+  mb.begin(&Serial2, -1); // -1 = no direction pin, auto-direction on RS-485 adapter
   mb.slave(UI_ESP_SLAVE_ID);
   
   // Add holding registers
@@ -38,7 +38,8 @@ void modbusSlaveInit() {
   initialized = true;
   lastMasterContact = millis();
   
-  Serial.println("[ModbusSlave] Initialized as slave ID 2 on Serial (GPIO1 TXD, GPIO3 RXD)");
+  Serial.printf("[ModbusSlave] Initialized as slave ID %d on Serial2 (RX=GPIO%d, TX=GPIO%d)\n",
+                UI_ESP_SLAVE_ID, UI_SERIAL_RXD, UI_SERIAL_TXD);
 }
 
 // ============================================================================

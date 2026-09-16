@@ -18,9 +18,9 @@
 #define CONTROL_RXD  16  // Serial2
 #define CONTROL_TXD  17  // Serial2
 
-// UI ESP: Uses UART0 (labeled TXD/RXD pins = GPIO 1/3)
-#define UI_SERIAL_RXD  3   // GPIO3 (labeled RXD)
-#define UI_SERIAL_TXD  1   // GPIO1 (labeled TXD)
+// UI ESP: Uses Serial2 (UART2) on GPIO 17 (RX) and GPIO 16 (TX)
+#define UI_SERIAL_RXD  17   // GPIO 17 (RX from module TX)
+#define UI_SERIAL_TXD  16   // GPIO 16 (TX to module RX)
 
 #define MODBUS_BAUDRATE   9600
 #define MODBUS_SERIAL_CFG SERIAL_8N2  // 8 bits, no parity, 2 stop bits
@@ -68,24 +68,24 @@
 // ============================================================================
 // LCD Display (I2C)
 #define LCD_I2C_ADDR    0x27
-#define LCD_SDA_PIN     25
-#define LCD_SCL_PIN     26
+#define LCD_SDA_PIN     21
+#define LCD_SCL_PIN     22
 #define LCD_COLS        16
 #define LCD_ROWS        2
 #define LCD_UPDATE_MS   300
 
-// Rotary Encoders
-#define ENCODER1_CLK    17
-#define ENCODER1_DT     4
-#define ENCODER1_SW     15
+// Rotary Encoders (reassigned away from GPIO 16/17 which are dedicated to Modbus Serial2)
+#define ENCODER1_CLK    18   // Quadrature Clock (moved from 17)
+#define ENCODER1_DT     4    // Quadrature Data
+#define ENCODER1_SW     15   // Push button (active-low)
 
-#define ENCODER2_CLK    16
-#define ENCODER2_DT     18
-#define ENCODER2_SW     5
+#define ENCODER2_CLK    25   // Quadrature Clock (moved from 16)
+#define ENCODER2_DT     5    // Quadrature Data (moved from 18)
+#define ENCODER2_SW     2    // Push button (active-low) (moved from 5)
 
 // Button Inputs (7 buttons, LEDs are passive/integrated)
 #define BUTTON_GPIO_0   23
-#define BUTTON_GPIO_1   22
+#define BUTTON_GPIO_1   26
 #define BUTTON_GPIO_2   19
 #define BUTTON_GPIO_3   34
 #define BUTTON_GPIO_4   35

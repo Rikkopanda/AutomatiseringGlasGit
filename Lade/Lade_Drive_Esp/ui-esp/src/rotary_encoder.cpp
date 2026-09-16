@@ -34,10 +34,10 @@ struct EncoderState {
 };
 
 static EncoderState encoders[2] = {
-  // ENCODER_MAIN: CLK=17, DT=4, Button=15
+  // ENCODER_MAIN: CLK=18, DT=4, Button=15
   {ENCODER1_CLK, ENCODER1_DT, ENCODER1_SW},
   
-  // ENCODER_SECONDARY: CLK=16, DT=18, Button=5
+  // ENCODER_SECONDARY: CLK=25, DT=5, Button=2
   {ENCODER2_CLK, ENCODER2_DT, ENCODER2_SW}
 };
 

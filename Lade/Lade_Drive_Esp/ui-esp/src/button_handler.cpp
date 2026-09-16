@@ -29,7 +29,7 @@ struct ButtonState {
 // Button pin mapping (7 buttons, LEDs are integrated)
 static ButtonState buttons[NUM_BUTTONS] = {
   {BUTTON_GPIO_0},  // Button 0 (GPIO 23)
-  {BUTTON_GPIO_1},  // Button 1 (GPIO 22)
+  {BUTTON_GPIO_1},  // Button 1 (GPIO 26)
   {BUTTON_GPIO_2},  // Button 2 (GPIO 19)
   {BUTTON_GPIO_3},  // Button 3 (GPIO 34)
   {BUTTON_GPIO_4},  // Button 4 (GPIO 35)
@@ -43,7 +43,7 @@ static ButtonState buttons[NUM_BUTTONS] = {
 
 void buttonInit() {
   for (int i = 0; i < NUM_BUTTONS; i++) {
-    pinMode(buttons[i].pinButton, INPUT_PULLUP);
+    pinMode(buttons[i].pinButton, INPUT_PULLDOWN);
     // Note: LEDs are integrated into button circuit (passive)
     // No separate LED pin control needed
   }
@@ -125,13 +125,16 @@ void ledBlink(ButtonID buttonId, uint8_t count, uint16_t onMs, uint16_t offMs) {
 void buttonTask() {
   unsigned long now = millis();
   
+  // Serial.printf("yeah %d\n", digitalRead(23));
+  // return;
   for (int i = 0; i < NUM_BUTTONS; i++) {
     ButtonState& btn = buttons[i];
     
     // ---- Debounce button input ----
-    bool rawPressed = digitalRead(btn.pinButton) == LOW; // Active-low
+    bool rawPressed = digitalRead(btn.pinButton) == HIGH; // Active-High
     
     if (rawPressed != btn.candidatePressed) {
+      Serial.printf("[DEBUG] Button %d = %d at %lu\n", i, rawPressed, now);
       btn.candidateSinceMs = now;
       btn.candidatePressed = rawPressed;
     }

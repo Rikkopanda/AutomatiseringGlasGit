@@ -30,35 +30,22 @@ void setup() {
   }
   
   Serial.printf("[TEST] Initializing LCD at 0x%02X...\n", found_addr);
-  delay(100);
-  
   lcd.init();
-  delay(50);
-  
   lcd.backlight();
   lcd.clear();
-  delay(50);
-  
-  // Test line 0
-  lcd.setCursor(0, 0);
-  lcd.print("LCD Test OK!");
-  
-  // Test line 1
-  lcd.setCursor(0, 1);
-  lcd.print("GPIO21/22 works");
-  
-  Serial.println("[TEST] LCD initialized successfully!");
-  Serial.println("[TEST] Line 0: 'LCD Test OK!'");
-  Serial.println("[TEST] Line 1: 'GPIO21/22 works'");
+  lcd.print("Hello");
 }
 
 void loop() {
   delay(2000);
   
   // Flash the backlight to show it's alive
-  lcd.noBacklight();
+  // lcd.noBacklight();
   delay(200);
-  lcd.backlight();
-  
-  Serial.println("[LOOP] LCD backlight toggled");
+  // lcd.print("LCD Test OK!");
+
+  // lcd.backlight();
+  // lcd.print("GPIO21/22 works");
+
+  // Serial.println("[LOOP] LCD backlight toggled");
 }   

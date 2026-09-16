@@ -77,5 +77,6 @@ void lcdTask();
  * Check if LCD is connected and ready
  */
 bool lcdIsReady();
+void printlcd(const char *str);
 
 #endif // LCD_DISPLAY_H
