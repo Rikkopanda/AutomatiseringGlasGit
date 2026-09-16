@@ -38,7 +38,7 @@
 // Commands FROM control ESP TO UI ESP
 #define UI_REG_SETPOINT       0  // Speed setpoint in r/min (0..3000 or custom range)
 #define UI_REG_RUN            1  // Run command: 0 = stop, 1 = run
-#define UI_REG_CONTROL_MODE   2  // Control mode flags (reserved for future)
+#define UI_REG_ACCEL          2  // Acceleration setting (steps/s^2 or RPM/s)
 
 // Status FROM control ESP TO UI ESP (echoed back from drive)
 #define UI_REG_DRIVE_STATUS   3  // Drive's Dn-18 status bits (bit=0 means ON)
