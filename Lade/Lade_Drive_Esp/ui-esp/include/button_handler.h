@@ -25,7 +25,10 @@ enum ButtonID {
   BUTTON_4 = 4,
   BUTTON_5 = 5,
   BUTTON_6 = 6,
-  NUM_BUTTONS = 7
+  BUTTON_7 = 7,
+  BUTTON_8 = 8,
+  BUTTON_9 = 9,
+  NUM_BUTTONS = 10
 };
 
 // ============================================================================

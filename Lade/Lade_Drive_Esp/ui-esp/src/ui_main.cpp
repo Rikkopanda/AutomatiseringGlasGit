@@ -67,6 +67,33 @@ static void handleEncoder() {
   }
 }
 
+static void handleEncoderAccel() {
+  int8_t delta = encoderGetDelta(ENCODER_SECONDARY);
+  
+  if (delta != 0) {
+    // Encoder provides +/-1 per pulse; scale it up for user-friendly speed steps
+    int16_t speedDelta = delta * ENCODER_STEP;
+    int16_t newSpeed = (int16_t)currentSetpoint + speedDelta;
+    
+    // Clamp to valid range
+    if (newSpeed < ENCODER_MIN_SPEED) newSpeed = ENCODER_MIN_SPEED;
+    if (newSpeed > ENCODER_MAX_SPEED) newSpeed = ENCODER_MAX_SPEED;
+    
+    currentSetpoint = (uint16_t)newSpeed;
+    modbusSlaveSetSetpoint(currentSetpoint);
+    
+    Serial.printf("[UI] Encoder: setpoint = %u r/min\n", currentSetpoint);
+  }
+  
+  // Encoder button toggles run/stop
+  if (encoderButtonWasPressed(ENCODER_SECONDARY)) {
+    currentRun = currentRun ? 0 : 1;
+    modbusSlaveSetRun(currentRun);
+    
+    Serial.printf("[UI] Encoder button: run = %u\n", currentRun);
+  }
+}
+
 /**
  * Process 7-button panel input
  */

@@ -35,7 +35,7 @@ static ButtonState buttons[NUM_BUTTONS] = {
   {BUTTON_GPIO_4},  // Button 4 (GPIO 35)
   {BUTTON_GPIO_5},  // Button 5 (GPIO 32)
   {BUTTON_GPIO_6},  // Button 6 (GPIO 33)
-  {EMERGENCY_STOP_PIN,  // Button 6 (GPIO 27, EM)
+  {EMERGENCY_STOP_PIN},  // Button 6 (GPIO 27, EM)
   {SWITCH_3POS_PIN2},  // Button 6 (GPIO 12, PIN 2)
   {SWITCH_3POS_PIN1},  // Button 6 (GPIO 14, PIN 1)
 };

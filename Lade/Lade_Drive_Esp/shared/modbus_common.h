@@ -39,6 +39,7 @@
 #define UI_REG_SETPOINT       0  // Speed setpoint in r/min (0..3000 or custom range)
 #define UI_REG_RUN            1  // Run command: 0 = stop, 1 = run
 #define UI_REG_ACCEL          2  // Acceleration setting (steps/s^2 or RPM/s)
+#define UI_REG_CONTROL_MODE   2  // Control mode flags (reserved for future)
 
 // Status FROM control ESP TO UI ESP (echoed back from drive)
 #define UI_REG_DRIVE_STATUS   3  // Drive's Dn-18 status bits (bit=0 means ON)
@@ -101,6 +102,10 @@
 #define ENCODER_MIN_SPEED     0
 #define ENCODER_MAX_SPEED     3000   // Match to your motor/drive
 #define ENCODER_STEP          10     // RPM increment per encoder pulse
+
+#define UI_REG_SETPOINT       0  // Speed setpoint in r/min (0..3000 or custom range)
+#define UI_REG_RUN            1  // Run command: 0 = stop, 1 = run
+#define UI_REG_ACCEL  
 
 // ============================================================================
 // CONTROL ESP COMPONENT PINS
