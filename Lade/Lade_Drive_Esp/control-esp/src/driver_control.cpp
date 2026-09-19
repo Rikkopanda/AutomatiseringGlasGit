@@ -80,7 +80,6 @@ void driverInit() {
 }
 
 void driverTask() {
-  modbusTask(); // Keep Modbus polling alive
   
   // Update status from drive feedback
   currentStatusBits = modbusDriveGetStatus();

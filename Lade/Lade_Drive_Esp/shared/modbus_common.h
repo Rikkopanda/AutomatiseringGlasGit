@@ -19,8 +19,8 @@
 #define CONTROL_TXD  17  // Serial2
 
 // UI ESP: Uses Serial2 (UART2) on GPIO 17 (RX) and GPIO 16 (TX)
-#define UI_SERIAL_RXD  17   // GPIO 17 (RX from module TX)
-#define UI_SERIAL_TXD  16   // GPIO 16 (TX to module RX)
+#define UI_SERIAL_RXD  16   // GPIO 17 (RX from module TX)
+#define UI_SERIAL_TXD  17   // GPIO 16 (TX to module RX)
 
 #define MODBUS_BAUDRATE   9600
 #define MODBUS_SERIAL_CFG SERIAL_8N2  // 8 bits, no parity, 2 stop bits
@@ -38,7 +38,7 @@
 // Commands FROM control ESP TO UI ESP
 #define UI_REG_SETPOINT       0  // Speed setpoint in r/min (0..3000 or custom range)
 #define UI_REG_RUN            1  // Run command: 0 = stop, 1 = run
-#define UI_REG_ACCEL          2  // Acceleration setting (steps/s^2 or RPM/s)
+#define UI_REG_ACCEL          3  // Acceleration setting (steps/s^2 or RPM/s)
 #define UI_REG_CONTROL_MODE   2  // Control mode flags (reserved for future)
 
 // Status FROM control ESP TO UI ESP (echoed back from drive)
@@ -105,7 +105,6 @@
 
 #define UI_REG_SETPOINT       0  // Speed setpoint in r/min (0..3000 or custom range)
 #define UI_REG_RUN            1  // Run command: 0 = stop, 1 = run
-#define UI_REG_ACCEL  
 
 // ============================================================================
 // CONTROL ESP COMPONENT PINS

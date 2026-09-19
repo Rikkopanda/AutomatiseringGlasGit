@@ -28,6 +28,7 @@ static unsigned long lastUiPoll = 0;
 static unsigned long lastDrivePoll = 0;
 static bool uiPollPending = false;
 static bool drivePollPending = false;
+static uint16_t driveRegs[2] = {0};
 
 // UI registers buffer
 static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
@@ -41,11 +42,10 @@ static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
  */
 static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
   uiPollPending = false;
-  
   if (event == Modbus::EX_SUCCESS) {
     uiSetpoint = uiRegs[0];
     uiRun = uiRegs[1];
-    // uiRegs[2] is control mode (unused currently)
+    Serial.printf("[ModbusMaster] UI poll OK: setpoint=%u run=%u\n", uiSetpoint, uiRun);
   } else {
     Serial.printf("[ModbusMaster] UI poll failed: 0x%02X\n", event);
   }
@@ -57,8 +57,9 @@ static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
  */
 static bool onDrivePollComplete(Modbus::ResultCode event, uint16_t, void*) {
   drivePollPending = false;
-  
-  if (event != Modbus::EX_SUCCESS) {
+  if (event == Modbus::EX_SUCCESS) {
+    Serial.printf("[ModbusMaster] Drive poll OK: speed=%d status=0x%04X\n", actualSpeed, driveStatus);
+  } else {
     Serial.printf("[ModbusMaster] Drive poll failed: 0x%02X\n", event);
   }
   return true;
@@ -79,21 +80,27 @@ void modbusInit() {
 }
 
 void modbusPollUI() {
-  if (!initialized || uiPollPending) return;
-  
-  uiPollPending = mb.readHreg(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, 3, onUIPollComplete) != 0;
+  if (!initialized || uiPollPending) 
+  {
+    Serial.printf("[ModbusMaster] UI poll skipped (init=%d pending=%d)\n", initialized, uiPollPending);
+    return;
+  }
+  bool ok = mb.readHreg(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, 3, onUIPollComplete);
+  uiPollPending = ok;
+  Serial.printf("[ModbusMaster] UI poll issued, readHreg returned %d\n", ok);
 }
 
 void modbusPollDrive() {
-  if (!initialized || drivePollPending) return;
-  
-  uint16_t driveRegs[2] = {0};
-  drivePollPending = mb.readHreg(DRIVE_SLAVE_ID, REG_DN08_ACTUAL_SPEED, driveRegs, 2, onDrivePollComplete) != 0;
-  
-  if (drivePollPending) {
-    actualSpeed = (int16_t)driveRegs[0];
-    driveStatus = driveRegs[1];
+  if (!initialized || drivePollPending)
+  {
+    Serial.printf("[ModbusMaster] Drive poll skipped (init=%d pending=%d)\n", initialized, uiPollPending);
+    return;
   }
+  
+  bool ok = mb.readHreg(DRIVE_SLAVE_ID, REG_DN08_ACTUAL_SPEED, driveRegs, 2, onDrivePollComplete) != 0;
+  
+  drivePollPending = ok;
+  Serial.printf("[ModbusMaster] Drive poll issued, readHreg returned %d\n", ok);
 }
 
 void modbusWriteStatusToUI(uint16_t statusBits) {
@@ -140,7 +147,7 @@ void modbusTask() {
   if (!initialized) return;
   
   mb.task();
-  
+
   // Poll UI ESP at regular interval
   if (millis() - lastUiPoll > MODBUS_POLL_INTERVAL_MS) {
     lastUiPoll = millis();
@@ -148,8 +155,8 @@ void modbusTask() {
   }
   
   // Poll drive at regular interval
-  if (millis() - lastDrivePoll > MODBUS_DRIVE_POLL_INTERVAL_MS) {
-    lastDrivePoll = millis();
-    modbusPollDrive();
-  }
+  // if (millis() - lastDrivePoll > MODBUS_DRIVE_POLL_INTERVAL_MS) {
+  //   lastDrivePoll = millis();
+  //   modbusPollDrive();
+  // }
 }
