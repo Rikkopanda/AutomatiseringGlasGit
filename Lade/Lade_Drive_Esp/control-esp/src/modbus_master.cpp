@@ -82,25 +82,25 @@ void modbusInit() {
 void modbusPollUI() {
   if (!initialized || uiPollPending) 
   {
-    Serial.printf("[ModbusMaster] UI poll skipped (init=%d pending=%d)\n", initialized, uiPollPending);
+    // Serial.printf("[ModbusMaster] UI poll skipped (init=%d pending=%d)\n", initialized, uiPollPending);
     return;
   }
   bool ok = mb.readHreg(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, 3, onUIPollComplete);
   uiPollPending = ok;
-  Serial.printf("[ModbusMaster] UI poll issued, readHreg returned %d\n", ok);
+  // Serial.printf("[ModbusMaster] UI poll issued, readHreg returned %d\n", ok);
 }
 
 void modbusPollDrive() {
   if (!initialized || drivePollPending)
   {
-    Serial.printf("[ModbusMaster] Drive poll skipped (init=%d pending=%d)\n", initialized, uiPollPending);
+    // Serial.printf("[ModbusMaster] Drive poll skipped (init=%d pending=%d)\n", initialized, uiPollPending);
     return;
   }
   
   bool ok = mb.readHreg(DRIVE_SLAVE_ID, REG_DN08_ACTUAL_SPEED, driveRegs, 2, onDrivePollComplete) != 0;
   
   drivePollPending = ok;
-  Serial.printf("[ModbusMaster] Drive poll issued, readHreg returned %d\n", ok);
+  // Serial.printf("[ModbusMaster] Drive poll issued, readHreg returned %d\n", ok);
 }
 
 void modbusWriteStatusToUI(uint16_t statusBits) {

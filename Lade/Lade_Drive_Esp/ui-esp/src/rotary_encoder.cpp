@@ -55,7 +55,7 @@ void encoderInit() {
     encoders[i].lastStateB = digitalRead(encoders[i].pinB);
     encoders[i].lastButton = digitalRead(encoders[i].pinButton) == LOW;
   }
-  
+
   Serial.println("[Encoder] Initialized");
 }
 
@@ -144,7 +144,8 @@ void encoderTask() {
       enc.lastStateA = a;
       enc.lastStateB = b;
     }
-    
+    // Serial.printf("pos = %d \n", enc.position);
+
     // Read and debounce button
     bool buttonNow = digitalRead(enc.pinButton) == LOW; // Active-low
     
