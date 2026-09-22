@@ -135,13 +135,13 @@ int16_t driverGetActualSpeed() {
 }
 
 void driverEnable() {
-  if (driveState == DRIVE_STATE_READY) {
-    servoEnabled = true;
-    modbusSetServoEnable(true);
-  }
+  if (driveState != DRIVE_STATE_READY || servoEnabled) return;
+  servoEnabled = true;
+  modbusSetServoEnable(true);
 }
 
 void driverDisable() {
+  if (!servoEnabled && targetSpeed == 0 && commandedSpeed == 0) return;
   servoEnabled = false;
   targetSpeed = 0;
   commandedSpeed = 0;
