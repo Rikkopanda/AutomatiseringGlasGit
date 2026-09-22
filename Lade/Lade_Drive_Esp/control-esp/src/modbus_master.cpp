@@ -79,32 +79,18 @@ static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
   return true;
 }
 
-/**
- * Dn-08 (speed) and Dn-18 (status) are not adjacent, so each poll cycle
- * is two single-register reads. A timeout skips the second read.
- */
+// Link check reads T6 Pr5.31 (station id). 0x0178 is not a register on this drive.
 static bool onDrivePollComplete(Modbus::ResultCode event, uint16_t, void*) {
-  bool wasStatus = driveReadStatus;
   txnFinished();
   driveReadStatus = false;
+  driveStatusFollowUp = false;
 
   if (event == Modbus::EX_SUCCESS) {
-    if (wasStatus) {
-      driveStatus = driveReg;
-      driveStatusFollowUp = false;
-    } else {
-      actualSpeed = (int16_t)driveReg;
-      driveStatusFollowUp = true;
-    }
-    Serial.printf("[ModbusMaster] Drive poll OK: speed=%d status=0x%04X\n",
-                  actualSpeed, driveStatus);
+    Serial.printf("[ModbusMaster] Drive link OK: slave=%u Pr5.31=%u\n",
+                  DRIVE_SLAVE_ID, driveReg);
   } else {
-    driveStatusFollowUp = false;
-    Serial.printf("[ModbusMaster] Drive %s poll failed: slave=%u reg=0x%04X 0x%02X\n",
-                  wasStatus ? "status" : "speed",
-                  DRIVE_SLAVE_ID,
-                  wasStatus ? REG_DN18_STATUS : REG_DN08_ACTUAL_SPEED,
-                  event);
+    Serial.printf("[ModbusMaster] Drive link failed: slave=%u reg=0x%04X 0x%02X\n",
+                  DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, event);
   }
   return true;
 }
@@ -174,7 +160,7 @@ void modbusPollUI() {
 void modbusPollDrive() {
   driveReadStatus = false;
   driveReg = 0;
-  beginRead(DRIVE_SLAVE_ID, REG_DN08_ACTUAL_SPEED, &driveReg, 1, onDrivePollComplete);
+  beginRead(DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, &driveReg, 1, onDrivePollComplete);
 }
 
 static bool pollDriveStatus() {
@@ -278,7 +264,7 @@ void modbusTask() {
   if (flushWrite()) return;
 
   if (now - lastDrivePoll > MODBUS_DRIVE_POLL_INTERVAL_MS) {
-    if (beginRead(DRIVE_SLAVE_ID, REG_DN08_ACTUAL_SPEED, &driveReg, 1, onDrivePollComplete)) {
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, &driveReg, 1, onDrivePollComplete)) {
       driveReadStatus = false;
       lastDrivePoll = now;
     }

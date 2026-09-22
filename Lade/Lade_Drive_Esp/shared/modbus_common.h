@@ -30,7 +30,7 @@
 // ============================================================================
 #define CONTROL_ESP_SLAVE_ID  1  // Control ESP (master role, but also slave for future)
 #define UI_ESP_SLAVE_ID       2  // UI ESP (slave)
-#define DRIVE_SLAVE_ID        1  // Servo drive (on same Modbus bus)
+#define DRIVE_SLAVE_ID        3  // Servo drive (on same Modbus bus)
 
 // ============================================================================
 // UI ESP HOLDING REGISTERS (0 = Control ESP master writes, UI ESP responds)
@@ -61,6 +61,12 @@
 #define REG_PN169_SPEED_SET   0x00A9  // Internal speed preset 1 / live setpoint
 #define REG_DN08_ACTUAL_SPEED 0x0178  // Actual motor speed (read-only)
 #define REG_DN18_STATUS       0x0182  // Output status bits (read-only)
+
+// T6 (Stepperonline) uses a different map. Pr5.31 is the RS485 station id.
+// This drive is set to 3 (Pr5.31). 0x0178 is not a T6 address.
+#define REG_T6_PR529_FRAME    0x053B  // 5 = 8 data, no parity, 2 stop
+#define REG_T6_PR530_BAUD     0x053D  // 2 = 9600
+#define REG_T6_PR531_SLAVE_ID 0x053F
 
 #define PN070_DEFAULT         32691   // 0x7FB3 = servo OFF at startup
 
