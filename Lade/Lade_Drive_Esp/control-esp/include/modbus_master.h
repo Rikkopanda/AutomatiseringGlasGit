@@ -73,6 +73,11 @@ void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm);
  */
 void modbusStopMotion();
 
+/**
+ * Stop the path and command servo-off. Used while the UI e-stop reads 0.
+ */
+void modbusEmergencyStop();
+
 // ============================================================================
 // STATE ACCESSORS
 // ============================================================================
@@ -86,6 +91,11 @@ uint16_t modbusGetUISetpoint();
  * Get last polled UI run command (0 = stop, 1 = run)
  */
 uint16_t modbusGetUIRun();
+
+/**
+ * True while the UI e-stop button (button 7) reads 0.
+ */
+bool modbusGetUIEstop();
 
 /**
  * Get last polled drive status bits

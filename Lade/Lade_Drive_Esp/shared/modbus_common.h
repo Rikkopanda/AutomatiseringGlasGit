@@ -49,6 +49,7 @@
 // Status FROM UI ESP TO control ESP (UI state feedback)
 #define UI_REG_ACTUAL_SPEED   4  // Actual speed displayed on UI (for diagnostics)
 #define UI_REG_UI_STATUS      5  // UI status bits (LED states, encoder feedback, etc.)
+#define UI_STATUS_ESTOP       0x0002  // bit1: 1 = button 7 is 0, motion must stop
 
 #define UI_REGISTERS_COUNT    6  // Total number of registers in UI ESP
 

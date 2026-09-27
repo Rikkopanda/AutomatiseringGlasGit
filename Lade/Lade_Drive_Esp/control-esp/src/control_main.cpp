@@ -57,17 +57,30 @@ void loop() {
   uint16_t uiSetpoint = modbusGetUISetpoint();
   uint16_t uiRun = modbusGetUIRun();
   
-  // Run rising edge starts one absolute move. Run = 0 (UI stop) e-stops it.
+  // Button 7 == 0 is e-stop: stop the path and command servo-off.
+  // Releasing it does not start a move; run has to be pressed again.
   static uint16_t lastRun = 0;
-  if (uiRun != lastRun) {
-    if (uiRun == 0) {
-      driverStopMotion();
-    } else if (driverGetState() == DRIVE_STATE_READY) {
-      int32_t pulses = (int32_t)uiSetpoint;
-      if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
-      driverMoveAbsolute(pulses, T6_MOVE_SPEED_RPM);
+  static bool estopActive = false;
+  static unsigned long lastEstopCmd = 0;
+  if (modbusGetUIEstop()) {
+    if (!estopActive || millis() - lastEstopCmd > 1000) {
+      driverEmergencyStop();
+      lastEstopCmd = millis();
+      estopActive = true;
     }
-    lastRun = uiRun;
+    lastRun = 0;
+  } else {
+    estopActive = false;
+    if (uiRun != lastRun) {
+      if (uiRun == 0) {
+        driverStopMotion();
+      } else if (driverGetState() == DRIVE_STATE_READY) {
+        int32_t pulses = (int32_t)uiSetpoint;
+        if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
+        driverMoveAbsolute(pulses, T6_MOVE_SPEED_RPM);
+      }
+      lastRun = uiRun;
+    }
   }
   
   // ---- Relay drive status back to UI ----

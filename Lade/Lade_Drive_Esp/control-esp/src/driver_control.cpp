@@ -165,7 +165,7 @@ void driverEmergencyStop() {
   targetSpeed = 0;
   commandedSpeed = 0;
   servoEnabled = false;
-  modbusSetServoEnable(false);
+  modbusEmergencyStop();
   Serial.println("[DriverControl] EMERGENCY STOP");
 }
 

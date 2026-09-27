@@ -24,6 +24,7 @@ static bool initialized = false;
 // Last polled values
 static uint16_t uiSetpoint = 0;
 static uint16_t uiRun = 0;
+static bool uiEstop = false;
 static uint16_t driveStatus = 0;
 static int16_t actualSpeed = 0;
 static int16_t commandedSpeed = 0;
@@ -36,8 +37,9 @@ static unsigned long txnStartMs = 0;
 static unsigned long lastUiPoll = 0;
 static unsigned long lastDrivePoll = 0;
 static uint16_t driveReg = 0;
-static bool driveReadStatus = false;     // transaction in flight is Dn-18
-static bool driveStatusFollowUp = false; // speed read finished; status read still due
+static bool driveReadTrigger = false;    // in flight read is Pr8.02, otherwise Pr0.01
+static bool driveTriggerFollowUp = false;
+static unsigned long driveTriggerBackoffUntil = 0;
 
 // UI registers buffer
 static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
@@ -80,25 +82,40 @@ static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
   if (event == Modbus::EX_SUCCESS) {
     uiSetpoint = uiRegs[0];
     uiRun = uiRegs[1];
-    Serial.printf("[ModbusMaster] UI poll OK: setpoint=%u run=%u\n", uiSetpoint, uiRun);
+    uiEstop = (uiRegs[UI_REG_UI_STATUS] & UI_STATUS_ESTOP) != 0;
+    Serial.printf("[ModbusMaster] UI poll OK: setpoint=%u run=%u estop=%u\n",
+                  uiSetpoint, uiRun, uiEstop ? 1 : 0);
   } else {
     Serial.printf("[ModbusMaster] UI poll failed: 0x%02X\n", event);
   }
   return true;
 }
 
-// Pr8.02 tells us whether a path is running and whether the stop landed.
+// Pr0.01 is a normal parameter and always answers. Pr8.02 (0x6002) answers
+// only after the drive is actually in PR mode.
 static bool onDrivePollComplete(Modbus::ResultCode event, uint16_t, void*) {
+  bool wasTrigger = driveReadTrigger;
   txnFinished();
-  driveReadStatus = false;
-  driveStatusFollowUp = false;
+  driveReadTrigger = false;
 
   if (event == Modbus::EX_SUCCESS) {
-    driveStatus = driveReg;
-    Serial.printf("[ModbusMaster] Drive Pr8.02=0x%04X\n", driveReg);
+    if (wasTrigger) {
+      driveStatus = driveReg;
+      driveTriggerFollowUp = false;
+      Serial.printf("[ModbusMaster] Drive Pr8.02=0x%04X\n", driveReg);
+    } else {
+      Serial.printf("[ModbusMaster] Drive Pr0.01=%u\n", driveReg);
+      driveTriggerFollowUp = (driveReg == T6_MODE_PR) &&
+                             (millis() >= driveTriggerBackoffUntil);
+    }
   } else {
-    Serial.printf("[ModbusMaster] Drive status failed: slave=%u reg=0x%04X 0x%02X\n",
-                  DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, event);
+    driveTriggerFollowUp = false;
+    if (wasTrigger) driveTriggerBackoffUntil = millis() + 5000;
+    Serial.printf("[ModbusMaster] Drive %s failed: slave=%u reg=0x%04X 0x%02X\n",
+                  wasTrigger ? "Pr8.02" : "Pr0.01",
+                  DRIVE_SLAVE_ID,
+                  wasTrigger ? REG_T6_PR802_TRIGGER : REG_T6_PR001_MODE,
+                  event);
   }
   return true;
 }
@@ -171,13 +188,13 @@ static bool beginWrite(uint8_t slave, uint16_t reg, uint16_t value, WriteKind ki
 }
 
 void modbusPollUI() {
-  beginRead(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, 3, onUIPollComplete);
+  beginRead(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, UI_REGISTERS_COUNT, onUIPollComplete);
 }
 
 void modbusPollDrive() {
-  driveReadStatus = false;
+  driveReadTrigger = false;
   driveReg = 0;
-  beginRead(DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, &driveReg, 1, onDrivePollComplete);
+  beginRead(DRIVE_SLAVE_ID, REG_T6_PR001_MODE, &driveReg, 1, onDrivePollComplete);
 }
 
 static bool enqueueDrive(uint16_t reg, uint16_t value) {
@@ -230,6 +247,15 @@ void modbusStopMotion() {
   Serial.println("[ModbusMaster] STOP queued");
 }
 
+void modbusEmergencyStop() {
+  dropWaitingDriveWrites();
+  enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_ESTOP);
+  // 0x03 = SRV-ON normally open. With SI1 unwired the servo turns off.
+  // The manual applies Pr4.00 after a drive power cycle.
+  enqueueDrive(REG_T6_PR400_SI1, 0x0003);
+  Serial.println("[ModbusMaster] EM STOP queued");
+}
+
 void modbusWriteStatusToUI(uint16_t statusBits) {
   statusToWrite = statusBits;
   if (statusSent && statusLastSent == statusBits) return;
@@ -278,6 +304,10 @@ uint16_t modbusGetUIRun() {
   return uiRun;
 }
 
+bool modbusGetUIEstop() {
+  return uiEstop;
+}
+
 uint16_t modbusDriveGetStatus() {
   return driveStatus;
 }
@@ -299,8 +329,8 @@ void modbusTask() {
   // flag is still set, the callback was lost; don't stay stuck.
   if (txnActive && mb.slave() == 0 && millis() - txnStartMs > 50) {
     txnActive = false;
-    driveReadStatus = false;
-    driveStatusFollowUp = false;
+    driveReadTrigger = false;
+    driveTriggerFollowUp = false;
     driveWriteInFlight = false;
     writeInFlight = WRITE_NONE;
   }
@@ -310,8 +340,16 @@ void modbusTask() {
 
   // UI first, so a drive that never answers cannot hold the bus every loop.
   if (now - lastUiPoll > MODBUS_POLL_INTERVAL_MS) {
-    if (beginRead(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, 3, onUIPollComplete)) {
+    if (beginRead(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, UI_REGISTERS_COUNT, onUIPollComplete)) {
       lastUiPoll = now;
+    }
+    return;
+  }
+
+  if (driveTriggerFollowUp) {
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, &driveReg, 1, onDrivePollComplete)) {
+      driveReadTrigger = true;
+      driveTriggerFollowUp = false;
     }
     return;
   }
@@ -319,8 +357,8 @@ void modbusTask() {
   if (flushWrite()) return;
 
   if (now - lastDrivePoll > MODBUS_DRIVE_POLL_INTERVAL_MS) {
-    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, &driveReg, 1, onDrivePollComplete)) {
-      driveReadStatus = false;
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR001_MODE, &driveReg, 1, onDrivePollComplete)) {
+      driveReadTrigger = false;
       lastDrivePoll = now;
     }
   }

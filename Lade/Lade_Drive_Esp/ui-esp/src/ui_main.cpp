@@ -40,6 +40,25 @@ const unsigned long SERIAL_REPORT_INTERVAL_MS = 1000;
  * Process rotary encoder input
  * Adjusts speed setpoint
  */
+// Button 7 is the e-stop. A reading of 0 (pin low) stops and disables the drive.
+static void publishEstop() {
+  bool estop = !buttonIsPressed(BUTTON_7);
+  static bool wasEstop = false;
+
+  if (estop && currentRun != 0) {
+    currentRun = 0;
+    modbusSlaveSetRun(0);
+  }
+  if (estop != wasEstop) {
+    Serial.println(estop ? "[UI] EM STOP" : "[UI] EM STOP released");
+    wasEstop = estop;
+  }
+
+  uint16_t uiStatus = estop ? UI_STATUS_ESTOP : 0;
+  if (currentRun) uiStatus |= 1;
+  modbusSlaveSetUIStatus(uiStatus);
+}
+
 static void handleEncoder() {
   int8_t delta = encoderGetDelta(ENCODER_MAIN);
   
@@ -163,10 +182,6 @@ static void updateDisplay() {
   // Update LCD with current speed and status
   lcdUpdateSpeed(currentSetpoint, currentRun ? true : false, driveStatus);
   
-  // Update UI status in Modbus
-  uint16_t uiStatus = 0;
-  if (currentRun) uiStatus |= (1 << 0);
-  modbusSlaveSetUIStatus(uiStatus);
 }
 
 // ============================================================================
@@ -223,6 +238,7 @@ void loop() {
   // ---- Handle user inputs ----
   handleEncoder();
   handleButtons();
+  publishEstop();
   
   // ---- Update display ----
   lcdTask();
