@@ -57,14 +57,17 @@ void loop() {
   uint16_t uiSetpoint = modbusGetUISetpoint();
   uint16_t uiRun = modbusGetUIRun();
   
-  // ---- Control logic ----
-  if (driverGetState() == DRIVE_STATE_READY) {
-    if (uiRun) {
-      driverEnable();
-      driverSetSpeed((int16_t)uiSetpoint);
-    } else {
-      driverDisable();
+  // Run rising edge starts one absolute move. Run = 0 (UI stop) e-stops it.
+  static uint16_t lastRun = 0;
+  if (uiRun != lastRun) {
+    if (uiRun == 0) {
+      driverStopMotion();
+    } else if (driverGetState() == DRIVE_STATE_READY) {
+      int32_t pulses = (int32_t)uiSetpoint;
+      if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
+      driverMoveAbsolute(pulses, T6_MOVE_SPEED_RPM);
     }
+    lastRun = uiRun;
   }
   
   // ---- Relay drive status back to UI ----

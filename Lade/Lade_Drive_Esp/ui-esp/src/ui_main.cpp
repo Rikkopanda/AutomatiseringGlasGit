@@ -58,12 +58,12 @@ static void handleEncoder() {
     Serial.printf("[UI] Encoder: setpoint = %u r/min\n", currentSetpoint);
   }
   
-  // Encoder button toggles run/stop
+  // Encoder button toggles run/stop. run = 0 is the stop message.
   if (encoderButtonWasPressed(ENCODER_MAIN)) {
     currentRun = currentRun ? 0 : 1;
     modbusSlaveSetRun(currentRun);
-    
-    Serial.printf("[UI] Encoder button: run = %u\n", currentRun);
+    if (currentRun == 0) Serial.println("[UI] STOP");
+    else Serial.printf("[UI] Encoder button: run = %u\n", currentRun);
   }
 }
 
@@ -85,12 +85,12 @@ static void handleEncoderAccel() {
     Serial.printf("[UI] Encoder: setpoint = %u r/min\n", currentSetpoint);
   }
   
-  // Encoder button toggles run/stop
+  // Encoder button toggles run/stop. run = 0 is the stop message.
   if (encoderButtonWasPressed(ENCODER_SECONDARY)) {
     currentRun = currentRun ? 0 : 1;
     modbusSlaveSetRun(currentRun);
-    
-    Serial.printf("[UI] Encoder button: run = %u\n", currentRun);
+    if (currentRun == 0) Serial.println("[UI] STOP");
+    else Serial.printf("[UI] Encoder button: run = %u\n", currentRun);
   }
 }
 
@@ -108,7 +108,7 @@ static void handleButtons() {
   if (buttonWasPressed(BUTTON_1)) {
     currentRun = 0;
     modbusSlaveSetRun(0);
-    Serial.println("[UI] Button 1 (Stop) pressed");
+    Serial.println("[UI] STOP");
   }
   
   // Buttons 2-6 reserved for future features
@@ -136,9 +136,9 @@ static void handleKeypad() {
     if (key >= '0' && key <= '9') {
       // Could implement numeric entry mode
     } else if (key == '*') {
-      // Example: Emergency stop
       currentRun = 0;
       modbusSlaveSetRun(0);
+      Serial.println("[UI] STOP");
     } else if (key == '#') {
       // Example: Run full speed
       currentSetpoint = ENCODER_MAX_SPEED;

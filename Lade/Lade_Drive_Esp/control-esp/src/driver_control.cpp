@@ -44,8 +44,8 @@ static void runInitSequence() {
   
   switch (initStep) {
     case 0:
-      // Enable Modbus control of SON (servo on/off)
-      modbusWriteSpeedToDrive(0);
+      // Pr0.01=6 and internal servo-on. The drive applies these after a power cycle.
+      modbusConfigurePrMode();
       initStep++;
       break;
       
@@ -124,6 +124,15 @@ void driverSetSpeed(int16_t speedRpm) {
   if (driveState == DRIVE_STATE_READY && servoEnabled) {
     targetSpeed = speedRpm;
   }
+}
+
+void driverMoveAbsolute(int32_t pulses, uint16_t speedRpm) {
+  if (driveState != DRIVE_STATE_READY) return;
+  modbusMoveAbsolute(pulses, speedRpm);
+}
+
+void driverStopMotion() {
+  modbusStopMotion();
 }
 
 int16_t driverGetCommandedSpeed() {

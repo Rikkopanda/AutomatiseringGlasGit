@@ -55,8 +55,16 @@ static uint16_t statusToWrite = 0;
 static uint16_t statusLastSent = 0;
 static uint16_t writeValueInFlight = 0;
 
-enum WriteKind : uint8_t { WRITE_NONE, WRITE_SPEED, WRITE_ENABLE, WRITE_STATUS };
+enum WriteKind : uint8_t { WRITE_NONE, WRITE_SPEED, WRITE_ENABLE, WRITE_STATUS, WRITE_DRIVE };
 static WriteKind writeInFlight = WRITE_NONE;
+
+// Drive register writes leave one at a time. Stop drops anything still waiting.
+static const uint8_t DRIVE_Q_SIZE = 12;
+static uint16_t driveQReg[DRIVE_Q_SIZE];
+static uint16_t driveQVal[DRIVE_Q_SIZE];
+static uint8_t driveQHead = 0;
+static uint8_t driveQCount = 0;
+static bool driveWriteInFlight = false;
 
 // ============================================================================
 // CALLBACKS
@@ -79,18 +87,18 @@ static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
   return true;
 }
 
-// Link check reads T6 Pr5.31 (station id). 0x0178 is not a register on this drive.
+// Pr8.02 tells us whether a path is running and whether the stop landed.
 static bool onDrivePollComplete(Modbus::ResultCode event, uint16_t, void*) {
   txnFinished();
   driveReadStatus = false;
   driveStatusFollowUp = false;
 
   if (event == Modbus::EX_SUCCESS) {
-    Serial.printf("[ModbusMaster] Drive link OK: slave=%u Pr5.31=%u\n",
-                  DRIVE_SLAVE_ID, driveReg);
+    driveStatus = driveReg;
+    Serial.printf("[ModbusMaster] Drive Pr8.02=0x%04X\n", driveReg);
   } else {
-    Serial.printf("[ModbusMaster] Drive link failed: slave=%u reg=0x%04X 0x%02X\n",
-                  DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, event);
+    Serial.printf("[ModbusMaster] Drive status failed: slave=%u reg=0x%04X 0x%02X\n",
+                  DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, event);
   }
   return true;
 }
@@ -100,19 +108,28 @@ static const char* writeKindName(WriteKind kind) {
     case WRITE_SPEED: return "speed";
     case WRITE_ENABLE: return "enable";
     case WRITE_STATUS: return "status";
+    case WRITE_DRIVE: return "drive";
     default: return "none";
   }
+}
+
+static void driveQueuePop() {
+  if (driveQCount == 0) return;
+  driveQHead = (driveQHead + 1) % DRIVE_Q_SIZE;
+  driveQCount--;
 }
 
 static bool onWriteComplete(Modbus::ResultCode event, uint16_t, void*) {
   WriteKind kind = writeInFlight;
   uint16_t value = writeValueInFlight;
   txnFinished();
+  if (kind == WRITE_DRIVE) driveWriteInFlight = false;
   if (event == Modbus::EX_SUCCESS) {
     if (kind == WRITE_STATUS) {
       statusSent = true;
       statusLastSent = statusToWrite;
     }
+    if (kind == WRITE_DRIVE) driveQueuePop();
   } else {
     Serial.printf("[ModbusMaster] %s write failed: value=0x%04X 0x%02X\n",
                   writeKindName(kind), value, event);
@@ -163,10 +180,54 @@ void modbusPollDrive() {
   beginRead(DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, &driveReg, 1, onDrivePollComplete);
 }
 
-static bool pollDriveStatus() {
-  driveReadStatus = true;
-  driveReg = 0;
-  return beginRead(DRIVE_SLAVE_ID, REG_DN18_STATUS, &driveReg, 1, onDrivePollComplete);
+static bool enqueueDrive(uint16_t reg, uint16_t value) {
+  if (driveQCount >= DRIVE_Q_SIZE) {
+    Serial.println("[ModbusMaster] drive write queue full");
+    return false;
+  }
+  uint8_t index = (driveQHead + driveQCount) % DRIVE_Q_SIZE;
+  driveQReg[index] = reg;
+  driveQVal[index] = value;
+  driveQCount++;
+  return true;
+}
+
+static void dropWaitingDriveWrites() {
+  if (driveWriteInFlight && driveQCount > 0) {
+    driveQCount = 1;
+    return;
+  }
+  driveQHead = 0;
+  driveQCount = 0;
+}
+
+void modbusConfigurePrMode() {
+  enqueueDrive(REG_T6_PR001_MODE, T6_MODE_PR);
+  enqueueDrive(REG_T6_PR400_SI1, T6_SI1_SERVO_ON);
+  enqueueDrive(REG_T6_PR025_AUX, T6_AUX_SAVE);
+  Serial.println("[ModbusMaster] PR mode queued (Pr0.01=6, servo on). Power-cycle the drive once.");
+}
+
+void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm) {
+  if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
+  if (pulses < 0) pulses = 0;
+  if (speedRpm > T6_MOVE_SPEED_RPM) speedRpm = T6_MOVE_SPEED_RPM;
+
+  enqueueDrive(REG_T6_PATH1_MODE, T6_PATH_ABSOLUTE);
+  enqueueDrive(REG_T6_PATH1_POS_H, (uint16_t)((pulses >> 16) & 0xFFFF));
+  enqueueDrive(REG_T6_PATH1_POS_L, (uint16_t)(pulses & 0xFFFF));
+  enqueueDrive(REG_T6_PATH1_SPEED, speedRpm);
+  enqueueDrive(REG_T6_PATH1_ACCEL, T6_MOVE_ACCEL_MS);
+  enqueueDrive(REG_T6_PATH1_DECEL, T6_MOVE_ACCEL_MS);
+  enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_PATH1);
+  Serial.printf("[ModbusMaster] Move queued: %ld pulses at %u r/min\n",
+                (long)pulses, speedRpm);
+}
+
+void modbusStopMotion() {
+  dropWaitingDriveWrites();
+  enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_ESTOP);
+  Serial.println("[ModbusMaster] STOP queued");
 }
 
 void modbusWriteStatusToUI(uint16_t statusBits) {
@@ -192,14 +253,13 @@ void modbusSetServoEnable(bool enable) {
 }
 
 static bool flushWrite() {
-  if (enableDirty) {
-    if (!beginWrite(DRIVE_SLAVE_ID, REG_PN070_COMM_STATE, enableToWrite, WRITE_ENABLE)) return false;
-    enableDirty = false;
-    return true;
-  }
-  if (speedDirty) {
-    if (!beginWrite(DRIVE_SLAVE_ID, REG_PN169_SPEED_SET, speedToWrite, WRITE_SPEED)) return false;
-    speedDirty = false;
+  if (driveQCount > 0 && !driveWriteInFlight) {
+    if (!beginWrite(DRIVE_SLAVE_ID, driveQReg[driveQHead], driveQVal[driveQHead], WRITE_DRIVE)) {
+      return false;
+    }
+    driveWriteInFlight = true;
+    Serial.printf("[ModbusMaster] drive 0x%04X <= 0x%04X\n",
+                  driveQReg[driveQHead], driveQVal[driveQHead]);
     return true;
   }
   if (statusDirty) {
@@ -241,6 +301,7 @@ void modbusTask() {
     txnActive = false;
     driveReadStatus = false;
     driveStatusFollowUp = false;
+    driveWriteInFlight = false;
     writeInFlight = WRITE_NONE;
   }
   if (txnActive) return;
@@ -255,16 +316,10 @@ void modbusTask() {
     return;
   }
 
-  // Speed read succeeded: fetch Dn-18 before starting anything else.
-  if (driveStatusFollowUp) {
-    if (pollDriveStatus()) driveStatusFollowUp = false;
-    return;
-  }
-
   if (flushWrite()) return;
 
   if (now - lastDrivePoll > MODBUS_DRIVE_POLL_INTERVAL_MS) {
-    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, &driveReg, 1, onDrivePollComplete)) {
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, &driveReg, 1, onDrivePollComplete)) {
       driveReadStatus = false;
       lastDrivePoll = now;
     }

@@ -65,6 +65,16 @@ void driverReset();
 void driverSetSpeed(int16_t speedRpm);
 
 /**
+ * Absolute PR move. pulses are command units, speedRpm is the path speed.
+ */
+void driverMoveAbsolute(int32_t pulses, uint16_t speedRpm);
+
+/**
+ * E-stop the current PR move.
+ */
+void driverStopMotion();
+
+/**
  * Get last commanded speed
  */
 int16_t driverGetCommandedSpeed();

@@ -56,6 +56,23 @@ void modbusWriteSpeedToDrive(int16_t speedRpm);
  */
 void modbusSetServoEnable(bool enable);
 
+/**
+ * Queue Pr0.01 = 6 and internal servo-on, then save.
+ * The drive uses the new mode only after its own power is cycled.
+ */
+void modbusConfigurePrMode();
+
+/**
+ * Absolute move on PR path 1. Position is in command pulses.
+ * Speed is the path speed in r/min.
+ */
+void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm);
+
+/**
+ * E-stop the PR move (Pr8.02 = 0x40).
+ */
+void modbusStopMotion();
+
 // ============================================================================
 // STATE ACCESSORS
 // ============================================================================

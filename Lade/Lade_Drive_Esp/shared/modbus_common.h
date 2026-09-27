@@ -68,6 +68,29 @@
 #define REG_T6_PR530_BAUD     0x053D  // 2 = 9600
 #define REG_T6_PR531_SLAVE_ID 0x053F
 
+// PR position mode (not the pulse-input direction in Pr0.06).
+#define REG_T6_PR001_MODE     0x0003  // 6 = PR mode. Needs a drive power cycle.
+#define REG_T6_PR006_PULSEDIR 0x000D  // pulse-input direction only. Needs a power cycle.
+#define REG_T6_PR025_AUX      0x0033  // write 0x2211 to save parameters
+#define REG_T6_PR400_SI1      0x0401  // 0x83 = servo on with no SI1 wire. Needs a power cycle.
+#define REG_T6_PR802_TRIGGER  0x6002  // write 0x0011 to run path 1, 0x0040 to e-stop
+#define REG_T6_PATH1_MODE     0x6208
+#define REG_T6_PATH1_POS_H    0x6209
+#define REG_T6_PATH1_POS_L    0x620A
+#define REG_T6_PATH1_SPEED    0x620B  // r/min
+#define REG_T6_PATH1_ACCEL    0x620C  // ms per 1000 r/min
+#define REG_T6_PATH1_DECEL    0x620D
+
+#define T6_MODE_PR            6
+#define T6_SI1_SERVO_ON       0x0083
+#define T6_AUX_SAVE           0x2211
+#define T6_PATH_ABSOLUTE      0x0011  // position type, interrupt the move already running
+#define T6_TRIGGER_PATH1      0x0011
+#define T6_TRIGGER_ESTOP      0x0040
+#define T6_MOVE_SPEED_RPM     60
+#define T6_MOVE_ACCEL_MS      500
+#define T6_MOVE_MAX_PULSES    3000
+
 #define PN070_DEFAULT         32691   // 0x7FB3 = servo OFF at startup
 
 // ============================================================================
