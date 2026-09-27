@@ -37,9 +37,7 @@ static unsigned long txnStartMs = 0;
 static unsigned long lastUiPoll = 0;
 static unsigned long lastDrivePoll = 0;
 static uint16_t driveReg = 0;
-static bool driveReadTrigger = false;    // in flight read is Pr8.02, otherwise Pr0.01
-static bool driveTriggerFollowUp = false;
-static unsigned long driveTriggerBackoffUntil = 0;
+static unsigned long drivePollBackoffUntil = 0;
 
 // UI registers buffer
 static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
@@ -91,31 +89,18 @@ static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
   return true;
 }
 
-// Pr0.01 is a normal parameter and always answers. Pr8.02 (0x6002) answers
-// only after the drive is actually in PR mode.
+// Pr5.31 is the station id. A read of it is the link check that already worked.
+// Pr0.01 (0x0003) and Pr8.02 (0x6002) stayed silent on this drive.
 static bool onDrivePollComplete(Modbus::ResultCode event, uint16_t, void*) {
-  bool wasTrigger = driveReadTrigger;
   txnFinished();
-  driveReadTrigger = false;
 
   if (event == Modbus::EX_SUCCESS) {
-    if (wasTrigger) {
-      driveStatus = driveReg;
-      driveTriggerFollowUp = false;
-      Serial.printf("[ModbusMaster] Drive Pr8.02=0x%04X\n", driveReg);
-    } else {
-      Serial.printf("[ModbusMaster] Drive Pr0.01=%u\n", driveReg);
-      driveTriggerFollowUp = (driveReg == T6_MODE_PR) &&
-                             (millis() >= driveTriggerBackoffUntil);
-    }
+    Serial.printf("[ModbusMaster] Drive link OK: slave=%u Pr5.31=%u\n",
+                  DRIVE_SLAVE_ID, driveReg);
   } else {
-    driveTriggerFollowUp = false;
-    if (wasTrigger) driveTriggerBackoffUntil = millis() + 5000;
-    Serial.printf("[ModbusMaster] Drive %s failed: slave=%u reg=0x%04X 0x%02X\n",
-                  wasTrigger ? "Pr8.02" : "Pr0.01",
-                  DRIVE_SLAVE_ID,
-                  wasTrigger ? REG_T6_PR802_TRIGGER : REG_T6_PR001_MODE,
-                  event);
+    drivePollBackoffUntil = millis() + 5000;
+    Serial.printf("[ModbusMaster] Drive link failed: slave=%u reg=0x%04X 0x%02X\n",
+                  DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, event);
   }
   return true;
 }
@@ -140,13 +125,15 @@ static bool onWriteComplete(Modbus::ResultCode event, uint16_t, void*) {
   WriteKind kind = writeInFlight;
   uint16_t value = writeValueInFlight;
   txnFinished();
-  if (kind == WRITE_DRIVE) driveWriteInFlight = false;
+  if (kind == WRITE_DRIVE) {
+    driveWriteInFlight = false;
+    driveQueuePop();
+  }
   if (event == Modbus::EX_SUCCESS) {
     if (kind == WRITE_STATUS) {
       statusSent = true;
       statusLastSent = statusToWrite;
     }
-    if (kind == WRITE_DRIVE) driveQueuePop();
   } else {
     Serial.printf("[ModbusMaster] %s write failed: value=0x%04X 0x%02X\n",
                   writeKindName(kind), value, event);
@@ -192,9 +179,8 @@ void modbusPollUI() {
 }
 
 void modbusPollDrive() {
-  driveReadTrigger = false;
   driveReg = 0;
-  beginRead(DRIVE_SLAVE_ID, REG_T6_PR001_MODE, &driveReg, 1, onDrivePollComplete);
+  beginRead(DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, &driveReg, 1, onDrivePollComplete);
 }
 
 static bool enqueueDrive(uint16_t reg, uint16_t value) {
@@ -329,8 +315,6 @@ void modbusTask() {
   // flag is still set, the callback was lost; don't stay stuck.
   if (txnActive && mb.slave() == 0 && millis() - txnStartMs > 50) {
     txnActive = false;
-    driveReadTrigger = false;
-    driveTriggerFollowUp = false;
     driveWriteInFlight = false;
     writeInFlight = WRITE_NONE;
   }
@@ -346,19 +330,11 @@ void modbusTask() {
     return;
   }
 
-  if (driveTriggerFollowUp) {
-    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, &driveReg, 1, onDrivePollComplete)) {
-      driveReadTrigger = true;
-      driveTriggerFollowUp = false;
-    }
-    return;
-  }
-
   if (flushWrite()) return;
 
-  if (now - lastDrivePoll > MODBUS_DRIVE_POLL_INTERVAL_MS) {
-    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR001_MODE, &driveReg, 1, onDrivePollComplete)) {
-      driveReadTrigger = false;
+  if (now >= drivePollBackoffUntil &&
+      now - lastDrivePoll > MODBUS_DRIVE_POLL_INTERVAL_MS) {
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR531_SLAVE_ID, &driveReg, 1, onDrivePollComplete)) {
       lastDrivePoll = now;
     }
   }

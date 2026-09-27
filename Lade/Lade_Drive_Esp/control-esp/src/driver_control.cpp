@@ -44,8 +44,8 @@ static void runInitSequence() {
   
   switch (initStep) {
     case 0:
-      // Pr0.01=6 and internal servo-on. The drive applies these after a power cycle.
-      modbusConfigurePrMode();
+      // Pr0.01 is set on the drive panel. Writing it from here timed out and
+      // was retried forever, which blocked the bus.
       initStep++;
       break;
       
