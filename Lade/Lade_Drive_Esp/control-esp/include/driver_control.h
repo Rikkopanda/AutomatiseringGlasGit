@@ -92,6 +92,10 @@ int16_t driverGetActualSpeed();
  * Enable servo (SON = 1)
  */
 void driverEnable();
+/*
+enable pin
+*/
+void setDriveEnabled(bool enabled);
 
 /**
  * Disable servo (SON = 0)

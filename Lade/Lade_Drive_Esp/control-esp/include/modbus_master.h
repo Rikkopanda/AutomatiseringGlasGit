@@ -69,6 +69,12 @@ void modbusConfigurePrMode();
 void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm);
 
 /**
+ * Relative move on PR path 1. Position is relative delta in pulses.
+ * Speed is the path speed in r/min.
+ */
+void modbusMoveRelative(int32_t pulses, uint16_t speedRpm);
+
+/**
  * E-stop the PR move (Pr8.02 = 0x40).
  */
 void modbusStopMotion();
@@ -106,6 +112,16 @@ uint16_t modbusDriveGetStatus();
  * Get last polled actual motor speed
  */
 int16_t modbusDriveGetActualSpeed();
+
+/**
+ * Get last polled actual motor position in pulses (signed 32-bit, 10000 = 1 rev)
+ */
+int32_t modbusDriveGetActualPosition();
+
+/**
+ * Get last polled target command position in pulses (signed 32-bit)
+ */
+int32_t modbusDriveGetCommandPosition();
 
 /**
  * Check if Modbus is ready (initialized and bus responsive)

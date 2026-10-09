@@ -26,6 +26,18 @@ static uint16_t currentStatusBits = 0;
 // INITIALIZATION SEQUENCE
 // ============================================================================
 
+void setDriveEnabled(bool enabled) {
+#if USE_ENABLE_PIN
+#if ENABLE_ACTIVE_LOW
+  digitalWrite(CONTROL_ENABLE_PIN, enabled ? HIGH : LOW);
+#else
+  digitalWrite(CONTROL_ENABLE_PIN, enabled ? HIGH : LOW);
+#endif
+#else
+  (void)enabled;
+#endif
+}
+
 /**
  * Run initialization sequence
  * Configures drive registers for Modbus control

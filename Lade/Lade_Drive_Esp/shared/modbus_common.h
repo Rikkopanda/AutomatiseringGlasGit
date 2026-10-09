@@ -86,11 +86,19 @@
 #define T6_SI1_SERVO_ON       0x0083
 #define T6_AUX_SAVE           0x2211
 #define T6_PATH_ABSOLUTE      0x0011  // position type, interrupt the move already running
+#define T6_PATH_RELATIVE      0x0041  // position type, relative to current command
 #define T6_TRIGGER_PATH1      0x0011
 #define T6_TRIGGER_ESTOP      0x0040
 #define T6_MOVE_SPEED_RPM     60
 #define T6_MOVE_ACCEL_MS      500
-#define T6_MOVE_MAX_PULSES    3000
+#define T6_MOVE_MAX_PULSES    50000
+
+// T6 Monitor Registers (PR Mode / Internal)
+#define REG_T6_CMD_POS_H      0x602A  // Command position high (signed 32-bit)
+#define REG_T6_CMD_POS_L      0x602B  // Command position low
+#define REG_T6_MOTOR_POS_H    0x602C  // Motor actual position high (signed 32-bit, 10000 pulses = 1 rev)
+#define REG_T6_MOTOR_POS_L    0x602D  // Motor actual position low
+#define REG_T6_ACTUAL_SPEED   0x0B00  // Actual motor speed in RPM
 
 #define PN070_DEFAULT         32691   // 0x7FB3 = servo OFF at startup
 
@@ -143,6 +151,8 @@
 #define CONTROL_DIRECTION_PIN  12  // Direction line
 #define CONTROL_PULSE_PIN      14  // Pulse line
 #define CONTROL_ENABLE_PIN     13  // Enable line
+#define USE_ENABLE_PIN 1    // 1 = physical enable wire used, 0 = no enable pin on drive
+#define ENABLE_ACTIVE_LOW 1   // 1: ENABLE low = ON (common), 0: ENABLE high = ON
 
 // ============================================================================
 // TIMING CONSTANTS

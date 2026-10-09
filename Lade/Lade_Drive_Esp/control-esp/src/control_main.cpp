@@ -38,7 +38,13 @@ void setup() {
   
   // Initialize driver control (which initializes Modbus inside)
   driverInit();
-  
+
+  #if USE_ENABLE_PIN
+    pinMode(CONTROL_ENABLE_PIN, OUTPUT);
+    setDriveEnabled(false);
+  #endif
+
+
   Serial.println("Setup complete. Waiting for drive...");
   Serial.println();
 }
@@ -62,6 +68,9 @@ void loop() {
   static uint16_t lastRun = 0;
   static bool estopActive = false;
   static unsigned long lastEstopCmd = 0;
+
+  setDriveEnabled(uiRun);
+  // digitalWrite(13, HIGH);
   if (modbusGetUIEstop()) {
     if (!estopActive || millis() - lastEstopCmd > 1000) {
       driverEmergencyStop();
