@@ -42,7 +42,7 @@ const unsigned long SERIAL_REPORT_INTERVAL_MS = 1000;
  */
 // Button 7 is the e-stop. A reading of 0 (pin low) stops and disables the drive.
 static void publishEstop() {
-  bool estop = !buttonIsPressed(BUTTON_7);
+  bool estop = buttonIsPressed(BUTTON_7);
   static bool wasEstop = false;
 
   if (estop && currentRun != 0) {
@@ -58,6 +58,8 @@ static void publishEstop() {
   if (currentRun) uiStatus |= 1;
   modbusSlaveSetUIStatus(uiStatus);
 }
+
+
 
 static void handleEncoder() {
   int8_t delta = encoderGetDelta(ENCODER_MAIN);
