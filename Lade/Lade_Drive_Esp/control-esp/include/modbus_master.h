@@ -62,6 +62,8 @@ void modbusSetServoEnable(bool enable);
  */
 void modbusConfigurePrMode();
 
+void modbusResetAlarm();
+
 /**
  * Absolute move on PR path 1. Position is in command pulses.
  * Speed is the path speed in r/min.
@@ -102,6 +104,8 @@ uint16_t modbusGetUIRun();
  * True while the UI e-stop button (button 7) reads 0.
  */
 bool modbusGetUIEstop();
+
+bool modbusGetUI_Reset_Alarm();
 
 /**
  * Get last polled drive status bits

@@ -71,6 +71,13 @@ void loop() {
 
   setDriveEnabled(uiRun);
   // digitalWrite(13, HIGH);
+  static bool resetHeld = false;
+  bool resetNow = modbusGetUI_Reset_Alarm();
+  if (resetNow && !resetHeld) {
+    modbusResetAlarm();
+  }
+  resetHeld = resetNow;
+
   if (modbusGetUIEstop()) {
     if (!estopActive || millis() - lastEstopCmd > 1000) {
       driverEmergencyStop();

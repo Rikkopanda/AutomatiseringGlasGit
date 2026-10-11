@@ -39,6 +39,9 @@ void modbusSlaveSetSetpoint(uint16_t speedRpm);
  */
 void modbusSlaveSetRun(uint16_t runCmd);
 
+void modbusSlaveSetResetAlarm(uint16_t runCmd);
+
+
 /**
  * Get last command from master (drive status bits)
  * Received via Modbus write from control ESP

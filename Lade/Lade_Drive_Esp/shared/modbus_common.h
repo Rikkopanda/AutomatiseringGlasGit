@@ -49,9 +49,11 @@
 // Status FROM UI ESP TO control ESP (UI state feedback)
 #define UI_REG_ACTUAL_SPEED   4  // Actual speed displayed on UI (for diagnostics)
 #define UI_REG_UI_STATUS      5  // UI status bits (LED states, encoder feedback, etc.)
+#define UI_REG_RESET_ALARM    6  // UI status bits (LED states, encoder feedback, etc.)
+
 #define UI_STATUS_ESTOP       0x0002  // bit1: 1 = button 7 is 0, motion must stop
 
-#define UI_REGISTERS_COUNT    6  // Total number of registers in UI ESP
+#define UI_REGISTERS_COUNT    7  // Total number of registers in UI ESP
 
 // ============================================================================
 // DRIVE HOLDING REGISTERS (Servo drive Modbus map - for reference)
@@ -81,6 +83,9 @@
 #define REG_T6_PATH1_SPEED    0x620B  // r/min
 #define REG_T6_PATH1_ACCEL    0x620C  // ms per 1000 r/min
 #define REG_T6_PATH1_DECEL    0x620D
+#define REG_T6_RESET_ALARM    0x0033  // write 0x1111 to reset current alarm
+#define VALUE_T6_RESET_ALARM  0x1111
+
 
 #define T6_MODE_PR            6
 #define T6_SI1_SERVO_ON       0x0083

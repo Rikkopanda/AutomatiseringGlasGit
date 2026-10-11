@@ -36,6 +36,50 @@ const unsigned long SERIAL_REPORT_INTERVAL_MS = 1000;
 // INPUT HANDLERS
 // ============================================================================
 
+static bool reset_alarm_status = false;
+
+// Button 5 is the reset alarm button
+// implemented as rising edge trigger
+static void publishAlarmReset() {
+  bool alarm_reset = buttonIsPressed(BUTTON_5);
+  bool estop = buttonIsPressed(BUTTON_7);
+
+  // Serial.println(alarm_reset ? "[UI] RESET" : "[UI] NO RESET");
+  // Serial.println(reset_alarm_status ? "[UI] reset_alarm_status" : "[UI] NO reset_alarm_status");
+
+  // if (estop)
+  // {
+  //   modbusSlaveSetResetAlarm(0);
+  //   return;
+  // }
+
+  if (alarm_reset)
+  {
+      modbusSlaveSetResetAlarm(1);
+  }
+  else
+  {
+      modbusSlaveSetResetAlarm(0);
+  }
+  return;
+  if (reset_alarm_status == false && alarm_reset == true)
+  {
+    modbusSlaveSetResetAlarm(1);
+    reset_alarm_status = true;
+    Serial.println("YEAH BOI");
+
+  }
+  else if (reset_alarm_status == true && alarm_reset == false)
+  {
+    modbusSlaveSetResetAlarm(0);
+    reset_alarm_status = false;
+  }
+  else if ((reset_alarm_status == false && alarm_reset == false) || (reset_alarm_status == true && alarm_reset == true))
+  {
+    modbusSlaveSetResetAlarm(0);
+  }
+}
+
 /**
  * Process rotary encoder input
  * Adjusts speed setpoint
@@ -241,7 +285,8 @@ void loop() {
   handleEncoder();
   handleButtons();
   publishEstop();
-  
+  publishAlarmReset();
+
   // ---- Update display ----
   lcdTask();
   updateDisplay();

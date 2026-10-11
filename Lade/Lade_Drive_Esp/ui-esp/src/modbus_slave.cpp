@@ -34,7 +34,9 @@ void modbusSlaveInit() {
   mb.addHreg(UI_REG_DRIVE_STATUS, 0);   // Drive status from master
   mb.addHreg(UI_REG_ACTUAL_SPEED, 0);   // Actual speed feedback
   mb.addHreg(UI_REG_UI_STATUS, 0);      // UI status bits
-  
+  mb.addHreg(UI_REG_RESET_ALARM, 0);
+
+
   initialized = true;
   lastMasterContact = millis();
   
@@ -54,6 +56,13 @@ void modbusSlaveSetSetpoint(uint16_t speedRpm) {
 void modbusSlaveSetRun(uint16_t runCmd) {
   if (!initialized) return;
   mb.Hreg(UI_REG_RUN, runCmd);
+}
+
+void modbusSlaveSetResetAlarm(uint16_t runCmd) {
+  if (!initialized) return;
+  mb.Hreg(UI_REG_RESET_ALARM, runCmd);
+  if (runCmd)
+    Serial.printf("OK %u\n", runCmd);
 }
 
 uint16_t modbusSlaveGetDriveStatus() {

@@ -25,6 +25,7 @@ static bool initialized = false;
 static uint16_t uiSetpoint = 0;
 static uint16_t uiRun = 0;
 static bool uiEstop = false;
+static bool uiResetAlarm = false;
 static uint16_t driveStatus = 0;
 static int16_t actualSpeed = 0;
 static int16_t commandedSpeed = 0;
@@ -81,8 +82,13 @@ static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
     uiSetpoint = uiRegs[0];
     uiRun = uiRegs[1];
     uiEstop = (uiRegs[UI_REG_UI_STATUS] & UI_STATUS_ESTOP) != 0;
-    Serial.printf("[ModbusMaster] UI poll OK: setpoint=%u run=%u estop=%u\n",
-                  uiSetpoint, uiRun, uiEstop ? 1 : 0);
+    uiResetAlarm = uiRegs[UI_REG_RESET_ALARM];
+    if (uiRegs[UI_REG_RESET_ALARM])
+    {
+        Serial.printf("[ModbusMaster] UI poll OK: sYEAH BOI\n");
+    }
+    // Serial.printf("[ModbusMaster] UI poll OK: setpoint=%u run=%u estop=%u, reset alarm=%u\n",
+    //               uiSetpoint, uiRun, uiEstop ? 1 : 0,  uiResetAlarm);
   } else {
     Serial.printf("[ModbusMaster] UI poll failed: 0x%02X\n", event);
   }
@@ -204,6 +210,10 @@ static void dropWaitingDriveWrites() {
   driveQCount = 0;
 }
 
+void modbusResetAlarm() {
+  enqueueDrive(REG_T6_RESET_ALARM, VALUE_T6_RESET_ALARM);
+}
+
 void modbusConfigurePrMode() {
   enqueueDrive(REG_T6_PR001_MODE, T6_MODE_PR);
   enqueueDrive(REG_T6_PR400_SI1, T6_SI1_SERVO_ON);
@@ -292,6 +302,10 @@ uint16_t modbusGetUIRun() {
 
 bool modbusGetUIEstop() {
   return uiEstop;
+}
+
+bool modbusGetUI_Reset_Alarm() {
+  return uiResetAlarm;
 }
 
 uint16_t modbusDriveGetStatus() {
