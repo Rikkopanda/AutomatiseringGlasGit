@@ -283,6 +283,7 @@ void loop() {
   
   // ---- Handle user inputs ----
   handleEncoder();
+  handleEncoderAccel();
   handleButtons();
   publishEstop();
   publishAlarmReset();
