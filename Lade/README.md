@@ -8,6 +8,7 @@ Zo kunnen verschillende posities via het gebruikerspaneel ingesteld worden en al
 Posities, snelheid en acceleratie is instelbaar via gebruikerspaneel.
 
 Met oog op toekomstige volautomatisch buig-hard proces kan deze oven-lade ook gebruikt worden.
+Het project is nog niet klaar, er komt een nieuwe nettere gebruikerspaneel met groter scherm.
 
 <img width="4096" height="3072" alt="IMG_20261015_130414924_HDR" src="https://github.com/user-attachments/assets/c96adfec-5282-41e1-af1e-83cf80dc37d2" />
 
