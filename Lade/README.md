@@ -1,4 +1,4 @@
-##Automatische oven-lade besturing
+## Automatische oven-lade besturing
 
 Voor een glas buig-en-hard proces dient glas vanuit de ovenlade snel naar de blowerlade getransporteerd te worden
 om zodoende snel van heet naar koud thermisch gehard te worden.
