@@ -75,8 +75,11 @@
 #define REG_T6_PR001_MODE     0x0003  // 6 = PR mode. Needs a drive power cycle.
 #define REG_T6_PR006_PULSEDIR 0x000D  // pulse-input direction only. Needs a power cycle.
 #define REG_T6_PR025_AUX      0x0033  // write 0x2211 to save parameters
-#define REG_T6_PR400_SI1      0x0401  // 0x83 = servo on with no SI1 wire. Needs a power cycle.
-#define REG_T6_PR802_TRIGGER  0x6002  // write 0x0011 to run path 1, 0x0040 to e-stop
+#define REG_T6_PR400_SI1      0x0401  // SI1 function. 0x83 = internal servo-on (no wire). Needs power cycle.
+#define REG_T6_PR401_SI2      0x0403  // SI2 function (NL = negative limit, POT/NOT logic)
+#define REG_T6_PR402_SI3      0x0405  // SI3 function (PL = positive limit)
+#define REG_T6_PR403_SI4      0x0407  // SI4 function (E-STOP / STP)
+#define REG_T6_PR802_TRIGGER  0x6002  // write 0x0011 to run path 1, 0x0040 to e-stop, 0x0020 to home
 #define REG_T6_PATH1_MODE     0x6208
 #define REG_T6_PATH1_POS_H    0x6209
 #define REG_T6_PATH1_POS_L    0x620A
@@ -86,6 +89,29 @@
 #define REG_T6_RESET_ALARM    0x0033  // write 0x1111 to reset current alarm
 #define VALUE_T6_RESET_ALARM  0x1111
 
+// T6 Motion status (read from REG_T6_PR802_TRIGGER)
+// 0x0000 = move/homing done (ready)
+// 0x01xx = motor moving (path xx)
+// 0x02xx = fine-positioning
+// 0x0300 = homing in progress
+#define T6_STATUS_DONE        0x0000
+
+// T6 DI function codes for Pr4.00–Pr4.03
+// Format: 0xTTFF where TT=type (00=NO, 80=NC), FF=function
+#define T6_DI_SRV_ON_NC       0x0083  // SI1: Servo enable, NC (active when pin open = safe default)
+#define T6_DI_SRV_ON_NO       0x0003  // SI1: Servo enable, NO (active when pin pulled low)
+#define T6_DI_NL_NC           0x00A6  // Negative limit (NOT), NC — stops neg motion when open
+#define T6_DI_NL_NO           0x0026  // Negative limit (NOT), NO
+#define T6_DI_PL_NC           0x00A5  // Positive limit (POT), NC — stops pos motion when open
+#define T6_DI_PL_NO           0x0025  // Positive limit (POT), NO
+#define T6_DI_ESTOP_NC        0x00A2  // E-STOP (STP), NC — stops drive when open (fail-safe)
+#define T6_DI_ESTOP_NO        0x0022  // E-STOP (STP), NO
+#define T6_DI_HOME_SENSOR_NO  0x000F  // Home sensor (ORG), NO
+#define T6_DI_NONE            0x0000  // Not assigned
+
+// T6 soft-reset: write to Pr0.25 to restart drive logic without power cycle
+#define REG_T6_SOFT_RESET     0x0033  // NOTE: same address as PR025_AUX – value distinguishes action
+#define VALUE_T6_SOFT_RESET   0x6666  // Triggers internal firmware restart
 
 #define T6_MODE_PR            6
 #define T6_SI1_SERVO_ON       0x0083
@@ -94,6 +120,7 @@
 #define T6_PATH_RELATIVE      0x0041  // position type, relative to current command
 #define T6_TRIGGER_PATH1      0x0011
 #define T6_TRIGGER_ESTOP      0x0040
+#define T6_TRIGGER_HOME       0x0020  // Start homing routine
 #define T6_MOVE_SPEED_RPM     60
 #define T6_MOVE_ACCEL_MS      500
 #define T6_MOVE_MAX_PULSES    50000
@@ -104,6 +131,9 @@
 #define REG_T6_MOTOR_POS_H    0x602C  // Motor actual position high (signed 32-bit, 10000 pulses = 1 rev)
 #define REG_T6_MOTOR_POS_L    0x602D  // Motor actual position low
 #define REG_T6_ACTUAL_SPEED   0x0B00  // Actual motor speed in RPM
+#define REG_T6_ALARM_CODE     0x0B03  // PrB.03 active alarm/error code (0 = no alarm)
+#define REG_T6_DI_STATUS      0x0B11  // PrB.17 physical DI status bits: bit0=SI1..bit3=SI4
+#define REG_T6_PR_STATUS      0x602E  // Pr8.46 PR function status (homing, limits, etc.)
 
 #define PN070_DEFAULT         32691   // 0x7FB3 = servo OFF at startup
 

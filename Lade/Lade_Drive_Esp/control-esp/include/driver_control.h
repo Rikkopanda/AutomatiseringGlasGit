@@ -70,6 +70,11 @@ void driverSetSpeed(int16_t speedRpm);
 void driverMoveAbsolute(int32_t pulses, uint16_t speedRpm);
 
 /**
+ * Relative PR move. pulses is relative delta from current position.
+ */
+void driverMoveRelative(int32_t pulses, uint16_t speedRpm);
+
+/**
  * E-stop the current PR move.
  */
 void driverStopMotion();

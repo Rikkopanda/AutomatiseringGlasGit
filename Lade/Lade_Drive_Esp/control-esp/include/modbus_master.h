@@ -77,9 +77,42 @@ void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm);
 void modbusMoveRelative(int32_t pulses, uint16_t speedRpm);
 
 /**
+ * Relative move on PR path 1. Pulses are relative from current position.
+ */
+void modbusMoveRelative(int32_t pulses, uint16_t speedRpm);
+
+/**
  * E-stop the PR move (Pr8.02 = 0x40).
  */
 void modbusStopMotion();
+
+/**
+ * Start the drive's homing routine (Pr8.02 = 0x20).
+ */
+void modbusStartHoming();
+
+/**
+ * Read the 4 DI function registers (Pr4.00–Pr4.03) and print them to Serial.
+ * Non-blocking; triggers a background read. Results print when the callback fires.
+ */
+void modbusReadDIConfig();
+
+/**
+ * Write limit-switch and E-stop functions to SI2..SI4 and soft-reset the drive.
+ * SI2 = NL (Neg Limit, NC), SI3 = PL (Pos Limit, NC), SI4 = E-STOP (NC).
+ * Call once at startup or via serial command.
+ */
+void modbusWriteDILimitSwitches();
+
+/**
+ * Read alarm code (PrB.03) and DI status (PrB.17) and print to Serial.
+ */
+void modbusReadAlarmAndDI();
+
+/**
+ * Read actual position (Pr8.44/45) and command position (0x602A/B) and print.
+ */
+void modbusReadPositionStatus();
 
 /**
  * Stop the path and command servo-off. Used while the UI e-stop reads 0.

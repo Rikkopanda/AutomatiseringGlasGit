@@ -29,8 +29,10 @@ static uint16_t currentStatusBits = 0;
 void setDriveEnabled(bool enabled) {
 #if USE_ENABLE_PIN
 #if ENABLE_ACTIVE_LOW
-  digitalWrite(CONTROL_ENABLE_PIN, enabled ? HIGH : LOW);
+  // Active LOW: enabled = LOW, disabled = HIGH
+  digitalWrite(CONTROL_ENABLE_PIN, enabled ? LOW : HIGH);
 #else
+  // Active HIGH: enabled = HIGH, disabled = LOW
   digitalWrite(CONTROL_ENABLE_PIN, enabled ? HIGH : LOW);
 #endif
 #else
@@ -141,6 +143,11 @@ void driverSetSpeed(int16_t speedRpm) {
 void driverMoveAbsolute(int32_t pulses, uint16_t speedRpm) {
   if (driveState != DRIVE_STATE_READY) return;
   modbusMoveAbsolute(pulses, speedRpm);
+}
+
+void driverMoveRelative(int32_t pulses, uint16_t speedRpm) {
+  if (driveState != DRIVE_STATE_READY) return;
+  modbusMoveRelative(pulses, speedRpm);
 }
 
 void driverStopMotion() {
