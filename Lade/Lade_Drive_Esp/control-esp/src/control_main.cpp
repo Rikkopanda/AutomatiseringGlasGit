@@ -12,8 +12,9 @@
  *   help          - show available commands
  *   status        - print drive speed, position, enable state
  *   readdi        - read and print DI function config from drive
- *   writedi       - write limit switches to SI2(NL)/SI3(PL)/SI4(ESTOP) and soft-reset
+ *   writedi       - write SI1=enable, SI2=E-stop, SI3=low limit, SI4=high limit (NC)
  *   alarm         - read alarm code from drive
+ *   motion        - read PR motion and physical input status from drive
  *   pos           - read and print actual + command position
  *   enable        - assert GPIO13 to enable drive (SRV-ON)
  *   disable       - deassert GPIO13 (servo off)
@@ -55,8 +56,9 @@ static void printHelp() {
   Serial.println("  help           - this message");
   Serial.println("  status         - print live drive state");
   Serial.println("  readdi         - read DI function config (Pr4.00-03)");
-  Serial.println("  writedi        - configure SI2=NL, SI3=PL, SI4=ESTOP (NC, save+reset)");
+  Serial.println("  writedi        - SI1=external enable, SI2=ESTOP, SI3=low, SI4=high");
   Serial.println("  alarm          - read alarm code from drive");
+  Serial.println("  motion         - read motion state and SI1-SI4 input levels");
   Serial.println("  pos            - read actual + command position");
   Serial.println("  enable         - assert GPIO13 (servo enable)");
   Serial.println("  disable        - deassert GPIO13 (servo off)");
@@ -131,6 +133,9 @@ static void handleSerialCommands() {
   } else if (cmd == "alarm") {
     modbusReadAlarmAndDI();
 
+  } else if (cmd == "motion") {
+    modbusReadMotionDiagnostics();
+
   } else if (cmd == "pos") {
     modbusReadPositionStatus();
 
@@ -156,7 +161,7 @@ static void handleSerialCommands() {
       Serial.println("[Cmd] Usage: move <pulses>  (e.g. move 10000)");
     } else {
       int32_t pulses = arg.toInt();
-      modbusMoveAbsolute(pulses, serialMoveSpeed);
+      modbusMoveAbsolute(pulses, serialMoveSpeed, serialMoveAccel);
     }
 
   } else if (cmd == "movel") {
@@ -164,7 +169,7 @@ static void handleSerialCommands() {
       Serial.println("[Cmd] Usage: movel <pulses>  (e.g. movel -5000)");
     } else {
       int32_t pulses = arg.toInt();
-      modbusMoveRelative(pulses, serialMoveSpeed);
+      modbusMoveRelative(pulses, serialMoveSpeed, serialMoveAccel);
     }
 
   } else if (cmd == "speed") {
@@ -271,7 +276,7 @@ void loop() {
       } else if (driverGetState() == DRIVE_STATE_READY) {
         int32_t pulses = (int32_t)uiSetpoint;
         if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
-        driverMoveAbsolute(pulses, T6_MOVE_SPEED_RPM);
+        driverMoveAbsolute(pulses, serialMoveSpeed, serialMoveAccel);
       }
       lastRun = uiRun;
     }

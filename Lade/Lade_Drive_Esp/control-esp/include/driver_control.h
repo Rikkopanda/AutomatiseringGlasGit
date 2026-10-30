@@ -67,12 +67,12 @@ void driverSetSpeed(int16_t speedRpm);
 /**
  * Absolute PR move. pulses are command units, speedRpm is the path speed.
  */
-void driverMoveAbsolute(int32_t pulses, uint16_t speedRpm);
+void driverMoveAbsolute(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm);
 
 /**
  * Relative PR move. pulses is relative delta from current position.
  */
-void driverMoveRelative(int32_t pulses, uint16_t speedRpm);
+void driverMoveRelative(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm);
 
 /**
  * E-stop the current PR move.

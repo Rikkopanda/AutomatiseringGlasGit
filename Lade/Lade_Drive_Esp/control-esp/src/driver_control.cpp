@@ -140,14 +140,14 @@ void driverSetSpeed(int16_t speedRpm) {
   }
 }
 
-void driverMoveAbsolute(int32_t pulses, uint16_t speedRpm) {
+void driverMoveAbsolute(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm) {
   if (driveState != DRIVE_STATE_READY) return;
-  modbusMoveAbsolute(pulses, speedRpm);
+  modbusMoveAbsolute(pulses, speedRpm, accelMsPer1000Rpm);
 }
 
-void driverMoveRelative(int32_t pulses, uint16_t speedRpm) {
+void driverMoveRelative(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm) {
   if (driveState != DRIVE_STATE_READY) return;
-  modbusMoveRelative(pulses, speedRpm);
+  modbusMoveRelative(pulses, speedRpm, accelMsPer1000Rpm);
 }
 
 void driverStopMotion() {

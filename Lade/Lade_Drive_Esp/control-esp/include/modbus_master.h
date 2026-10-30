@@ -68,18 +68,13 @@ void modbusResetAlarm();
  * Absolute move on PR path 1. Position is in command pulses.
  * Speed is the path speed in r/min.
  */
-void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm);
+void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm);
 
 /**
  * Relative move on PR path 1. Position is relative delta in pulses.
  * Speed is the path speed in r/min.
  */
-void modbusMoveRelative(int32_t pulses, uint16_t speedRpm);
-
-/**
- * Relative move on PR path 1. Pulses are relative from current position.
- */
-void modbusMoveRelative(int32_t pulses, uint16_t speedRpm);
+void modbusMoveRelative(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm);
 
 /**
  * E-stop the PR move (Pr8.02 = 0x40).
@@ -108,6 +103,9 @@ void modbusWriteDILimitSwitches();
  * Read alarm code (PrB.03) and DI status (PrB.17) and print to Serial.
  */
 void modbusReadAlarmAndDI();
+
+/** Read PR motion state (Pr8.02) and input IO status (Pr8.46). */
+void modbusReadMotionDiagnostics();
 
 /**
  * Read actual position (Pr8.44/45) and command position (0x602A/B) and print.

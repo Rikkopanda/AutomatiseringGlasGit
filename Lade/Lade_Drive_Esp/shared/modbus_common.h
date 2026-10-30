@@ -98,8 +98,8 @@
 
 // T6 DI function codes for Pr4.00–Pr4.03
 // Format: 0xTTFF where TT=type (00=NO, 80=NC), FF=function
-#define T6_DI_SRV_ON_NC       0x0083  // SI1: Servo enable, NC (active when pin open = safe default)
-#define T6_DI_SRV_ON_NO       0x0003  // SI1: Servo enable, NO (active when pin pulled low)
+#define T6_DI_SRV_ON_NC       0x0083  // SI1: internal servo enable (drive manual: Pr4.00=83)
+#define T6_DI_SRV_ON_NO       0x0003  // SI1: external servo enable input (drive manual: Pr4.00=03)
 #define T6_DI_NL_NC           0x00A6  // Negative limit (NOT), NC — stops neg motion when open
 #define T6_DI_NL_NO           0x0026  // Negative limit (NOT), NO
 #define T6_DI_PL_NC           0x00A5  // Positive limit (POT), NC — stops pos motion when open
@@ -114,7 +114,7 @@
 #define VALUE_T6_SOFT_RESET   0x6666  // Triggers internal firmware restart
 
 #define T6_MODE_PR            6
-#define T6_SI1_SERVO_ON       0x0083
+#define T6_SI1_SERVO_ON       T6_DI_SRV_ON_NO
 #define T6_AUX_SAVE           0x2211
 #define T6_PATH_ABSOLUTE      0x0011  // position type, interrupt the move already running
 #define T6_PATH_RELATIVE      0x0041  // position type, relative to current command
@@ -122,6 +122,7 @@
 #define T6_TRIGGER_ESTOP      0x0040
 #define T6_TRIGGER_HOME       0x0020  // Start homing routine
 #define T6_MOVE_SPEED_RPM     60
+#define T6_MOVE_MAX_SPEED_RPM 3000
 #define T6_MOVE_ACCEL_MS      500
 #define T6_MOVE_MAX_PULSES    50000
 

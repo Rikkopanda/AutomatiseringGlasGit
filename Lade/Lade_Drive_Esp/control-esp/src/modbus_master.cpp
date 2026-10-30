@@ -40,6 +40,7 @@ static unsigned long txnStartMs = 0;
 
 // Polling timing
 static unsigned long lastUiPoll = 0;
+static unsigned long uiPollBackoffUntil = 0;
 static unsigned long lastDrivePoll = 0;
 static unsigned long drivePollBackoffUntil = 0;
 
@@ -57,6 +58,10 @@ static uint16_t drivePosRegs[4] = {0};
 
 // DI config read buffer (4 regs at 0x0401)
 static uint16_t diConfigRegs[4] = {0};
+static const uint16_t diConfigAddresses[4] = {
+  REG_T6_PR400_SI1, REG_T6_PR401_SI2, REG_T6_PR402_SI3, REG_T6_PR403_SI4
+};
+static uint8_t diConfigReadIndex = 0;
 
 // Drive poll alternates between: speed poll, position poll
 static uint8_t drivePollPhase = 0;
@@ -89,6 +94,12 @@ static bool driveWriteInFlight = false;
 static bool pendingDIRead = false;
 static bool pendingAlarmRead = false;
 static bool pendingPositionRead = false;
+static bool pendingMotionDiagRead = false;
+static uint8_t motionDiagReadIndex = 0;
+static uint16_t motionDiagRegs[3] = {0};
+static const uint16_t motionDiagAddresses[3] = {
+  REG_T6_PR802_TRIGGER, REG_T6_PR_STATUS, REG_T6_DI_STATUS
+};
 
 // ============================================================================
 // CALLBACKS
@@ -102,6 +113,7 @@ static void txnFinished() {
 static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
   txnFinished();
   if (event == Modbus::EX_SUCCESS) {
+    uiPollBackoffUntil = 0;
     uiSetpoint = uiRegs[0];
     uiRun = uiRegs[1];
     uiEstop = (uiRegs[UI_REG_UI_STATUS] & UI_STATUS_ESTOP) != 0;
@@ -113,7 +125,10 @@ static bool onUIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
     // Serial.printf("[ModbusMaster] UI poll OK: setpoint=%u run=%u estop=%u, reset alarm=%u\n",
     //               uiSetpoint, uiRun, uiEstop ? 1 : 0,  uiResetAlarm);
   } else {
-    Serial.printf("[ModbusMaster] UI poll failed: 0x%02X\n", event);
+    // A missing UI response must not monopolize the shared bus or starve
+    // explicit drive diagnostics such as `readdi`.
+    uiPollBackoffUntil = millis() + 1000;
+    Serial.printf("[ModbusMaster] UI poll timeout/error: 0x%02X; retry in 1 s\n", event);
   }
   return true;
 }
@@ -158,8 +173,11 @@ static bool onDrivePosPollComplete(Modbus::ResultCode event, uint16_t, void*) {
 // DI config read (4 registers from 0x0401)
 static bool onDIConfigReadComplete(Modbus::ResultCode event, uint16_t, void*) {
   txnFinished();
-  pendingDIRead = false;
   if (event == Modbus::EX_SUCCESS) {
+    diConfigReadIndex++;
+    if (diConfigReadIndex < 4) return true;
+
+    pendingDIRead = false;
     // Decode each DI function code
     auto diName = [](uint16_t code) -> const char* {
       uint8_t fn = code & 0x7F;
@@ -185,7 +203,9 @@ static bool onDIConfigReadComplete(Modbus::ResultCode event, uint16_t, void*) {
     Serial.printf("  SI3 (Pr4.02 = 0x%04X) : %s [%s]\n", diConfigRegs[2], diName(diConfigRegs[2]), polarity(diConfigRegs[2]));
     Serial.printf("  SI4 (Pr4.03 = 0x%04X) : %s [%s]\n", diConfigRegs[3], diName(diConfigRegs[3]), polarity(diConfigRegs[3]));
   } else {
-    Serial.printf("[ModbusMaster] DI config read failed: 0x%02X\n", event);
+    pendingDIRead = false;
+    Serial.printf("[ModbusMaster] DI config read failed at Pr4.%02u (register 0x%04X): 0x%02X\n",
+                  diConfigReadIndex, diConfigAddresses[diConfigReadIndex], event);
   }
   return true;
 }
@@ -201,6 +221,30 @@ static bool onAlarmReadComplete(Modbus::ResultCode event, uint16_t, void*) {
   } else {
     Serial.printf("[ModbusMaster] Alarm read failed: 0x%02X\n", event);
   }
+  return true;
+}
+
+static bool onMotionDiagReadComplete(Modbus::ResultCode event, uint16_t, void*) {
+  txnFinished();
+  if (event != Modbus::EX_SUCCESS) {
+    pendingMotionDiagRead = false;
+    Serial.printf("[Drive Motion] Read failed at register 0x%04X: 0x%02X\n",
+                  motionDiagAddresses[motionDiagReadIndex], event);
+    return true;
+  }
+
+  motionDiagReadIndex++;
+  if (motionDiagReadIndex < 3) return true;
+
+  pendingMotionDiagRead = false;
+  uint16_t di = motionDiagRegs[2];
+  Serial.printf("[Drive Motion] Pr8.02 state=0x%04X, Pr8.46 PR IO=0x%04X, PrB.17 DI=0x%04X\n",
+                motionDiagRegs[0], motionDiagRegs[1], di);
+  Serial.printf("  SI1=%s SI2=%s SI3=%s SI4=%s (PrB.17 bit=1 means input HIGH)\n",
+                (di & 0x0001) ? "HIGH" : "LOW",
+                (di & 0x0002) ? "HIGH" : "LOW",
+                (di & 0x0004) ? "HIGH" : "LOW",
+                (di & 0x0008) ? "HIGH" : "LOW");
   return true;
 }
 
@@ -322,35 +366,39 @@ void modbusConfigurePrMode() {
   Serial.println("[ModbusMaster] PR mode queued (Pr0.01=6, servo on). Power-cycle the drive once.");
 }
 
-void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm) {
+void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm) {
   if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
   if (pulses < 0) pulses = 0;
-  if (speedRpm > T6_MOVE_SPEED_RPM) speedRpm = T6_MOVE_SPEED_RPM;
+  if (speedRpm > T6_MOVE_MAX_SPEED_RPM) speedRpm = T6_MOVE_MAX_SPEED_RPM;
+  if (accelMsPer1000Rpm < 1) accelMsPer1000Rpm = 1;
+  if (accelMsPer1000Rpm > 5000) accelMsPer1000Rpm = 5000;
 
   enqueueDrive(REG_T6_PATH1_MODE, T6_PATH_ABSOLUTE);
   enqueueDrive(REG_T6_PATH1_POS_H, (uint16_t)((pulses >> 16) & 0xFFFF));
   enqueueDrive(REG_T6_PATH1_POS_L, (uint16_t)(pulses & 0xFFFF));
   enqueueDrive(REG_T6_PATH1_SPEED, speedRpm);
-  enqueueDrive(REG_T6_PATH1_ACCEL, T6_MOVE_ACCEL_MS);
-  enqueueDrive(REG_T6_PATH1_DECEL, T6_MOVE_ACCEL_MS);
+  enqueueDrive(REG_T6_PATH1_ACCEL, accelMsPer1000Rpm);
+  enqueueDrive(REG_T6_PATH1_DECEL, accelMsPer1000Rpm);
   enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_PATH1);
-  Serial.printf("[ModbusMaster] Absolute move queued: %ld pulses at %u r/min\n",
-                (long)pulses, speedRpm);
+  Serial.printf("[ModbusMaster] Absolute move queued: %ld pulses at %u r/min, accel/decel %u ms/1000rpm\n",
+                (long)pulses, speedRpm, accelMsPer1000Rpm);
 }
 
-void modbusMoveRelative(int32_t pulses, uint16_t speedRpm) {
+void modbusMoveRelative(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm) {
   if (pulses > T6_MOVE_MAX_PULSES)  pulses = T6_MOVE_MAX_PULSES;
   if (pulses < -T6_MOVE_MAX_PULSES) pulses = -T6_MOVE_MAX_PULSES;
+  if (accelMsPer1000Rpm < 1) accelMsPer1000Rpm = 1;
+  if (accelMsPer1000Rpm > 5000) accelMsPer1000Rpm = 5000;
 
   enqueueDrive(REG_T6_PATH1_MODE, T6_PATH_RELATIVE);
   enqueueDrive(REG_T6_PATH1_POS_H, (uint16_t)((pulses >> 16) & 0xFFFF));
   enqueueDrive(REG_T6_PATH1_POS_L, (uint16_t)(pulses & 0xFFFF));
   enqueueDrive(REG_T6_PATH1_SPEED, speedRpm);
-  enqueueDrive(REG_T6_PATH1_ACCEL, T6_MOVE_ACCEL_MS);
-  enqueueDrive(REG_T6_PATH1_DECEL, T6_MOVE_ACCEL_MS);
+  enqueueDrive(REG_T6_PATH1_ACCEL, accelMsPer1000Rpm);
+  enqueueDrive(REG_T6_PATH1_DECEL, accelMsPer1000Rpm);
   enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_PATH1);
-  Serial.printf("[ModbusMaster] Relative move queued: %+ld pulses at %u r/min\n",
-                (long)pulses, speedRpm);
+  Serial.printf("[ModbusMaster] Relative move queued: %+ld pulses at %u r/min, accel/decel %u ms/1000rpm\n",
+                (long)pulses, speedRpm, accelMsPer1000Rpm);
 }
 
 void modbusStartHoming() {
@@ -368,35 +416,36 @@ void modbusStopMotion() {
 void modbusEmergencyStop() {
   dropWaitingDriveWrites();
   enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_ESTOP);
-  // 0x03 = SRV-ON normally open. With SI1 unwired the servo turns off.
-  // The manual applies Pr4.00 after a drive power cycle.
-  enqueueDrive(REG_T6_PR400_SI1, 0x0003);
-  Serial.println("[ModbusMaster] EM STOP queued");
+  // Do not change Pr4.00 here: SI1 is the physical servo-enable input and its
+  // configured polarity must remain stable when an emergency stop occurs.
+  Serial.println("[ModbusMaster] EM STOP queued (DI configuration unchanged)");
 }
 
 void modbusReadDIConfig() {
+  diConfigReadIndex = 0;
   pendingDIRead = true;
-  Serial.println("[ModbusMaster] DI config read requested (will fire when bus is free)");
+  Serial.println("[ModbusMaster] DI config read requested (Pr4.00-03, spaced register addresses)");
 }
 
 void modbusWriteDILimitSwitches() {
   // SI1 stays as SRV-ON (NC, internal – no wire needed)
-  enqueueDrive(REG_T6_PR400_SI1, T6_DI_SRV_ON_NC);   // Pr4.00 = 0x0083
-  // SI2 = Negative Limit (NOT), Normally Closed
-  enqueueDrive(REG_T6_PR401_SI2, T6_DI_NL_NC);        // Pr4.01 = 0x00A6
-  // SI3 = Positive Limit (POT), Normally Closed
-  enqueueDrive(REG_T6_PR402_SI3, T6_DI_PL_NC);        // Pr4.02 = 0x00A5
-  // SI4 = E-STOP (STP), Normally Closed (fail-safe: open = stop)
-  enqueueDrive(REG_T6_PR403_SI4, T6_DI_ESTOP_NC);     // Pr4.03 = 0x00A2
+  // SI1 is physically wired as external servo enable; keep Pr4.00 = 0x0003.
+  enqueueDrive(REG_T6_PR400_SI1, T6_DI_SRV_ON_NO);
+  // SI2 = E-STOP (STP), Normally Closed (fail-safe: open = stop)
+  enqueueDrive(REG_T6_PR401_SI2, T6_DI_ESTOP_NC); // Pr4.01 = 0x00A2
+  // SI3 = Negative Limit (NOT), Normally Closed
+  enqueueDrive(REG_T6_PR402_SI3, T6_DI_NL_NC);    // Pr4.02 = 0x00A6
+  // SI4 = Positive Limit (POT), Normally Closed
+  enqueueDrive(REG_T6_PR403_SI4, T6_DI_PL_NC);    // Pr4.03 = 0x00A5
   // Save parameters (Pr0.25 = 0x2211)
   enqueueDrive(REG_T6_PR025_AUX, T6_AUX_SAVE);
   // Soft-reset to apply DI changes without power cycling
   enqueueDrive(REG_T6_SOFT_RESET, VALUE_T6_SOFT_RESET);
   Serial.println("[ModbusMaster] DI config queued:");
   Serial.println("  SI1 = SRV-ON (NC, internal)");
-  Serial.println("  SI2 = NL/NOT neg limit (NC) -- wire limit switch low end");
-  Serial.println("  SI3 = PL/POT pos limit  (NC) -- wire limit switch high end");
-  Serial.println("  SI4 = E-STOP/STP        (NC) -- wire emergency stop");
+  Serial.println("  SI2 = E-STOP/STP        (NC) -- wire emergency stop");
+  Serial.println("  SI3 = NL/NOT neg limit  (NC) -- wire limit switch low end");
+  Serial.println("  SI4 = PL/POT pos limit  (NC) -- wire limit switch high end");
   Serial.println("  Save + soft-reset queued");
 }
 
@@ -408,6 +457,12 @@ void modbusReadAlarmAndDI() {
 void modbusReadPositionStatus() {
   pendingPositionRead = true;
   Serial.println("[ModbusMaster] Position read requested");
+}
+
+void modbusReadMotionDiagnostics() {
+  motionDiagReadIndex = 0;
+  pendingMotionDiagRead = true;
+  Serial.println("[ModbusMaster] Reading Pr8.02 motion, Pr8.46 PR IO, and PrB.17 SI input levels");
 }
 
 void modbusWriteStatusToUI(uint16_t statusBits) {
@@ -502,21 +557,10 @@ void modbusTask() {
 
   unsigned long now = millis();
 
-  // UI first, so a drive that never answers cannot hold the bus every loop.
-  if (now - lastUiPoll > MODBUS_POLL_INTERVAL_MS) {
-    if (beginRead(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, UI_REGISTERS_COUNT, onUIPollComplete)) {
-      lastUiPoll = now;
-    }
-    return;
-  }
-
-  if (flushWrite()) return;
-
-  // On-demand reads (triggered by serial commands)
+  // Explicit diagnostic reads take priority over periodic traffic.
   if (pendingDIRead) {
-    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR400_SI1, diConfigRegs, 4, onDIConfigReadComplete)) {
-      pendingDIRead = false; // callback will print results
-    }
+    beginRead(DRIVE_SLAVE_ID, diConfigAddresses[diConfigReadIndex],
+              &diConfigRegs[diConfigReadIndex], 1, onDIConfigReadComplete);
     return;
   }
 
@@ -530,6 +574,24 @@ void modbusTask() {
   if (pendingPositionRead) {
     if (beginRead(DRIVE_SLAVE_ID, REG_T6_CMD_POS_H, drivePosRegs, 4, onDrivePosPollComplete)) {
       pendingPositionRead = false;
+    }
+    return;
+  }
+
+  if (pendingMotionDiagRead) {
+    beginRead(DRIVE_SLAVE_ID, motionDiagAddresses[motionDiagReadIndex],
+              &motionDiagRegs[motionDiagReadIndex], 1, onMotionDiagReadComplete);
+    return;
+  }
+
+  if (flushWrite()) return;
+
+  // Poll the UI regularly, but back off after a timeout so a missing UI node
+  // cannot continually occupy the shared bus while the drive is healthy.
+  if (now >= uiPollBackoffUntil &&
+      now - lastUiPoll > MODBUS_POLL_INTERVAL_MS) {
+    if (beginRead(UI_ESP_SLAVE_ID, UI_REG_SETPOINT, uiRegs, UI_REGISTERS_COUNT, onUIPollComplete)) {
+      lastUiPoll = now;
     }
     return;
   }

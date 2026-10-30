@@ -163,17 +163,17 @@ static void handleEncoderAccel() {
  * Process 7-button panel input
  */
 static void handleButtons() {
-  // Example: Button 0 = Run, Button 1 = Stop, others for future use
+  // Panel wiring: Button 0 is START and Button 1 is STOP.
   if (buttonWasPressed(BUTTON_0)) {
     currentRun = 1;
     modbusSlaveSetRun(1);
-    Serial.println("[UI] Button 0 (Run) pressed");
+    Serial.println("[UI] Button 0 (START) pressed");
   }
   
   if (buttonWasPressed(BUTTON_1)) {
     currentRun = 0;
     modbusSlaveSetRun(0);
-    Serial.println("[UI] STOP");
+    Serial.println("[UI] Button 1 (STOP) pressed");
   }
   
   // Buttons 2-6 reserved for future features
