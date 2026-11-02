@@ -56,6 +56,7 @@ static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
 static uint16_t driveSpeedReg = 0;       // 0x0B00
 static uint16_t driveAlarmReg = 0;       // 0x0B03
 static uint16_t driveDIStatusReg = 0;    // 0x0B11
+static volatile bool limitTripPending = false;
 bool modbusIsPositiveLimitActive() {
   return (driveDIStatusReg & (1u << 3)) == 0; // SI4 is configured NC
 }
@@ -83,14 +84,27 @@ static bool onDriveDIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
       // Backup stop: the drive should stop on ORG itself, but do not continue
       // applying torque if the drive-side input configuration is wrong.
       Serial.println("[Home switch] SI3 triggered: drive native homing should stop");
+      limitTripPending = true;
+      modbusStopMotion();
     }
   }
   if (positiveLimit != lastPositiveLimit) {
     Serial.printf("[Limit] High/positive limit SI4: %s\n",
                   positiveLimit ? "released" : "SWITCHED");
     lastPositiveLimit = positiveLimit;
+    if (!positiveLimit) {
+      Serial.println("[Limit] SI4 triggered: sending STOP");
+      limitTripPending = true;
+      modbusStopMotion();
+    }
   }
   return true;
+}
+
+bool modbusConsumeLimitTrip() {
+  bool tripped = limitTripPending;
+  limitTripPending = false;
+  return tripped;
 }
 
 // Position block: 4 regs at 0x602A (cmd pos H, cmd pos L, motor pos H, motor pos L)

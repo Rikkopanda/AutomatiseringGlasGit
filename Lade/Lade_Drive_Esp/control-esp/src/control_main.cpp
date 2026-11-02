@@ -505,6 +505,17 @@ void loop() {
   static uint16_t lastRun = 0;
   static bool estopActive = false;
   static unsigned long lastEstopCmd = 0;
+  static bool limitLockout = false;
+
+  if (modbusConsumeLimitTrip()) {
+    positionActionActive = false;
+    pedalMoveActive = false;
+    homingActionActive = false;
+    limitLockout = true;
+    setDriveEnabled(false);
+    lastRun = 0;
+    Serial.println("[Limit] Motion stopped and drive disabled; clear with Stop/abort");
+  }
 
   static bool resetHeld = false;
   bool resetNow = modbusGetUI_Reset_Alarm();
@@ -532,7 +543,13 @@ void loop() {
         positionActionActive = false;
         pedalMoveActive = false;
         setDriveEnabled(false);
+        limitLockout = false;
       } else if (driverGetState() == DRIVE_STATE_READY) {
+        if (limitLockout) {
+          Serial.println("[UI] Start blocked until Stop/abort clears the limit lockout");
+          lastRun = uiRun;
+          return;
+        }
         int32_t pulses = (int32_t)uiSetpoint;
         if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
         if (startPositionAction(pulses, "UI")) {

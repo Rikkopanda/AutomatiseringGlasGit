@@ -179,6 +179,9 @@ uint16_t modbusDriveGetPRStatus();
 /** True when SI4 reports the normally-closed positive limit as active. */
 bool modbusIsPositiveLimitActive();
 
+/** Consume a newly detected SI3/SI4 limit trip event. */
+bool modbusConsumeLimitTrip();
+
 /**
  * Check if Modbus is ready (initialized and bus responsive)
  */
