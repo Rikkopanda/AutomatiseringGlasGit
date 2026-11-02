@@ -20,6 +20,12 @@
  *   disable       - deassert GPIO13 (servo off)
  *   invert        - toggle enable pin active level
  *   home          - trigger homing routine on drive
+ *   home negative - home toward the negative limit
+ *   home positive - home toward the positive limit
+ *   home switch negative - home using a separate home switch
+ *   home switch positive - home using a separate home switch
+ *   homebackoff <pulses> - set homing overpass/back-off distance
+ *   setzero       - set the drive's current position as zero
  *   move <n>      - absolute move to n pulses (e.g. move 10000)
  *   movel <n>     - relative move by n pulses (e.g. movel -5000)
  *   speed <n>     - set move speed in r/min for next move (default 60)
@@ -29,6 +35,7 @@
  */
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include "driver_control.h"
 #include "modbus_master.h"
 #include "../../shared/modbus_common.h"
@@ -44,6 +51,89 @@ const unsigned long STATUS_REPORT_INTERVAL_MS = 2000;
 static uint16_t serialMoveSpeed = T6_MOVE_SPEED_RPM;   // default 60 rpm
 static uint16_t serialMoveAccel = T6_MOVE_ACCEL_MS;    // default 500 ms/1000rpm
 static bool enableActiveHigh = !(ENABLE_ACTIVE_LOW);   // from shared header
+static constexpr uint8_t POSITION_COUNT = 5;
+static int32_t storedPositions[POSITION_COUNT] = {600, 30000, 60000, 90000, 120000};
+static uint8_t currentPositionIndex = 0;
+static Preferences positionPreferences;
+static bool pedalMoveActive = false;
+static int32_t pedalMoveTarget = 0;
+static unsigned long pedalMoveStartedMs = 0;
+static constexpr unsigned long PEDAL_MOVE_SETTLE_MS = 500;
+static constexpr long PEDAL_POSITION_TOLERANCE = 2;
+
+struct FootPedalState {
+  bool stablePressed = false;
+  bool candidatePressed = false;
+  unsigned long candidateSinceMs = 0;
+};
+
+static FootPedalState footPedal;
+
+static void loadStoredPositions() {
+  positionPreferences.begin("positions", false);
+  for (uint8_t index = 0; index < POSITION_COUNT; ++index) {
+    char key[4];
+    snprintf(key, sizeof(key), "p%u", index);
+    storedPositions[index] = positionPreferences.getLong(key, 0);
+  }
+  storedPositions[0] = 0;
+}
+
+static void printStoredPositions() {
+  for (uint8_t index = 0; index < POSITION_COUNT; ++index) {
+    Serial.printf("P%u = %ld pulses%s\n", index, (long)storedPositions[index],
+                  index == currentPositionIndex ? " (selected)" : "");
+  }
+}
+
+static bool updateFootPedalInput() {
+  bool rawPressed = digitalRead(CONTROL_FOOT_PEDAL_PIN) == HIGH;
+
+  unsigned long now = millis();
+  if (rawPressed != footPedal.candidatePressed) {
+    footPedal.candidatePressed = rawPressed;
+    footPedal.candidateSinceMs = now;
+    Serial.printf("[Pedal] GPIO%d raw=%s\n", CONTROL_FOOT_PEDAL_PIN,
+                  rawPressed ? "HIGH (pressed)" : "LOW (released)");
+    return false;
+  }
+  if (footPedal.stablePressed != footPedal.candidatePressed &&
+      now - footPedal.candidateSinceMs >= BUTTON_DEBOUNCE_MS) {
+    footPedal.stablePressed = footPedal.candidatePressed;
+    return footPedal.stablePressed;
+  }
+  return false;
+}
+
+static void handleFootPedal() {
+  if (!updateFootPedalInput()) return;
+  if (pedalMoveActive || driverGetState() != DRIVE_STATE_READY) {
+    Serial.printf("[Pedal] Press ignored while drive is busy active=%d, driverState=%d, readyState=%d\n",
+                  pedalMoveActive, driverGetState(), DRIVE_STATE_READY);
+    return;
+  }
+
+  currentPositionIndex = (currentPositionIndex + 1) % POSITION_COUNT;
+  pedalMoveTarget = storedPositions[currentPositionIndex];
+  pedalMoveStartedMs = millis();
+  pedalMoveActive = true;
+  Serial.printf("[Pedal] Pressed: enabling drive, moving to P%u = %ld pulses\n",
+                currentPositionIndex, (long)pedalMoveTarget);
+  setDriveEnabled(true);
+  modbusMoveAbsolute(pedalMoveTarget, serialMoveSpeed, serialMoveAccel);
+}
+
+static void serviceFootPedalMove() {
+  if (!pedalMoveActive || millis() - pedalMoveStartedMs < PEDAL_MOVE_SETTLE_MS) return;
+
+  long positionError = labs((long)modbusDriveGetActualPosition() - pedalMoveTarget);
+  if (positionError > PEDAL_POSITION_TOLERANCE) return;
+
+  pedalMoveActive = false;
+  setDriveEnabled(false);
+  Serial.printf("[Pedal] Position P%u reached at %ld pulses: drive disabled\n",
+                currentPositionIndex, (long)modbusDriveGetActualPosition());
+}
 
 // ============================================================================
 // SERIAL COMMAND HANDLER
@@ -64,8 +154,16 @@ static void printHelp() {
   Serial.println("  disable        - deassert GPIO13 (servo off)");
   Serial.println("  invert         - toggle GPIO13 active level (HIGH/LOW)");
   Serial.println("  home           - trigger homing routine");
+  Serial.println("  home negative  - home toward the negative limit");
+  Serial.println("  home positive  - home toward the positive limit");
+  Serial.println("  home switch negative - home using a separate home switch");
+  Serial.println("  home switch positive - home using a separate home switch");
+  Serial.println("  homebackoff <pulses> - set homing back-off distance");
+  Serial.println("  setzero        - set current drive position as zero");
   Serial.println("  move <pulses>  - absolute move (e.g. move 10000)");
   Serial.println("  movel <pulses> - relative move (e.g. movel -5000)");
+  Serial.println("  position <0-4> <pulses> - store pedal position (P0 is always 0)");
+  Serial.println("  positions      - print stored pedal positions");
   Serial.println("  speed <rpm>    - set move speed for next move (def 60)");
   Serial.println("  accel <ms>     - set accel time ms/1000rpm (def 500)");
   Serial.println("  stop           - immediate e-stop");
@@ -154,7 +252,52 @@ static void handleSerialCommands() {
     Serial.printf("[Cmd] Enable active level now: %s\n", enableActiveHigh ? "HIGH" : "LOW");
 
   } else if (cmd == "home") {
-    modbusStartHoming();
+    if (arg == "negative") {
+      modbusStartHomingDirection(false);
+    } else if (arg == "positive") {
+      modbusStartHomingDirection(true);
+    } else if (arg == "switch negative") {
+      modbusStartHomeSwitchHoming(false);
+    } else if (arg == "switch positive") {
+      modbusStartHomeSwitchHoming(true);
+    } else if (arg.length() == 0) {
+      modbusStartHoming();
+    } else {
+      Serial.println("[Cmd] Usage: home [negative|positive]");
+    }
+    currentPositionIndex = 0;
+
+  } else if (cmd == "setzero" || cmd == "zero") {
+    modbusSetCurrentPositionAsHome();
+    currentPositionIndex = 0;
+
+  } else if (cmd == "homebackoff") {
+    if (arg.length() == 0) {
+      Serial.println("[Cmd] Usage: homebackoff <pulses>");
+    } else {
+      modbusSetHomingBackoff((uint32_t)max(0L, arg.toInt()));
+    }
+
+  } else if (cmd == "positions") {
+    printStoredPositions();
+
+  } else if (cmd == "position") {
+    int separator = arg.indexOf(' ');
+    if (separator <= 0) {
+      Serial.println("[Cmd] Usage: position <0-4> <pulses>");
+    } else {
+      uint8_t index = (uint8_t)arg.substring(0, separator).toInt();
+      long pulses = arg.substring(separator + 1).toInt();
+      if (index >= POSITION_COUNT || pulses < 0 || pulses > T6_MOVE_MAX_PULSES) {
+        Serial.printf("[Cmd] Position index must be 0-4 and pulses 0-%d\n", T6_MOVE_MAX_PULSES);
+      } else {
+        storedPositions[index] = index == 0 ? 0 : pulses;
+        char key[4];
+        snprintf(key, sizeof(key), "p%u", index);
+        positionPreferences.putLong(key, storedPositions[index]);
+        Serial.printf("[Cmd] Stored P%u = %ld pulses\n", index, (long)storedPositions[index]);
+      }
+    }
 
   } else if (cmd == "move") {
     if (arg.length() == 0) {
@@ -222,6 +365,8 @@ void setup() {
     pinMode(CONTROL_ENABLE_PIN, OUTPUT);
     setDriveEnabled(false);
   #endif
+  pinMode(CONTROL_FOOT_PEDAL_PIN, INPUT_PULLDOWN);
+  loadStoredPositions();
 
 
   Serial.println("Setup complete. Waiting for drive...");
@@ -241,6 +386,7 @@ void loop() {
   
   // ---- Serial command interface ----
   handleSerialCommands();
+  handleFootPedal();
 
   // ---- Get current inputs from UI ----
   uint16_t uiSetpoint = modbusGetUISetpoint();
@@ -252,7 +398,7 @@ void loop() {
   static bool estopActive = false;
   static unsigned long lastEstopCmd = 0;
 
-  setDriveEnabled(uiRun);
+  setDriveEnabled(uiRun || pedalMoveActive);
   // digitalWrite(13, HIGH);
   static bool resetHeld = false;
   bool resetNow = modbusGetUI_Reset_Alarm();
@@ -267,6 +413,8 @@ void loop() {
       lastEstopCmd = millis();
       estopActive = true;
     }
+    pedalMoveActive = false;
+    setDriveEnabled(false);
     lastRun = 0;
   } else {
     estopActive = false;
@@ -281,6 +429,8 @@ void loop() {
       lastRun = uiRun;
     }
   }
+
+  serviceFootPedalMove();
   
   // ---- Relay drive status back to UI ----
   uint16_t driveStatus = driverGetStatusBits();

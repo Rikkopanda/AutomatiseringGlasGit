@@ -79,6 +79,8 @@
 #define REG_T6_PR401_SI2      0x0403  // SI2 function (NL = negative limit, POT/NOT logic)
 #define REG_T6_PR402_SI3      0x0405  // SI3 function (PL = positive limit)
 #define REG_T6_PR403_SI4      0x0407  // SI4 function (E-STOP / STP)
+#define REG_T6_PR810_HOMING   0x600A  // Pr8.10 homing method and direction
+#define REG_T6_PR821_OVERPASS 0x6015  // Pr8.21 homing overpass/back-off distance
 #define REG_T6_PR802_TRIGGER  0x6002  // write 0x0011 to run path 1, 0x0040 to e-stop, 0x0020 to home
 #define REG_T6_PATH1_MODE     0x6208
 #define REG_T6_PATH1_POS_H    0x6209
@@ -121,10 +123,14 @@
 #define T6_TRIGGER_PATH1      0x0011
 #define T6_TRIGGER_ESTOP      0x0040
 #define T6_TRIGGER_HOME       0x0020  // Start homing routine
+#define T6_TRIGGER_SET_HOME   0x0021  // Set current position as homing position
+#define T6_HOMING_NEGATIVE    0x0000  // Limit-switch homing in negative direction
+#define T6_HOMING_POSITIVE    0x0001  // Limit-switch homing in positive direction
+#define T6_HOMING_SWITCH_MODE 0x0004  // Pr8.10 bits 2-7 = homing-switch mode 1
 #define T6_MOVE_SPEED_RPM     60
 #define T6_MOVE_MAX_SPEED_RPM 3000
 #define T6_MOVE_ACCEL_MS      500
-#define T6_MOVE_MAX_PULSES    50000
+#define T6_MOVE_MAX_PULSES    150000
 
 // T6 Monitor Registers (PR Mode / Internal)
 #define REG_T6_CMD_POS_H      0x602A  // Command position high (signed 32-bit)
@@ -187,6 +193,7 @@
 #define CONTROL_DIRECTION_PIN  12  // Direction line
 #define CONTROL_PULSE_PIN      14  // Pulse line
 #define CONTROL_ENABLE_PIN     13  // Enable line
+#define CONTROL_FOOT_PEDAL_PIN 18  // Normally-open foot pedal to 3.3V
 #define USE_ENABLE_PIN 1    // 1 = physical enable wire used, 0 = no enable pin on drive
 #define ENABLE_ACTIVE_LOW 1   // 1: ENABLE low = ON (common), 0: ENABLE high = ON
 

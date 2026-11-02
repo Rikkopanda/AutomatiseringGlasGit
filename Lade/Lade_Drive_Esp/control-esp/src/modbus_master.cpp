@@ -43,6 +43,7 @@ static unsigned long lastUiPoll = 0;
 static unsigned long uiPollBackoffUntil = 0;
 static unsigned long lastDrivePoll = 0;
 static unsigned long drivePollBackoffUntil = 0;
+static unsigned long lastLimitPoll = 0;
 
 // UI registers buffer
 static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
@@ -52,6 +53,33 @@ static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
 static uint16_t driveSpeedReg = 0;       // 0x0B00
 static uint16_t driveAlarmReg = 0;       // 0x0B03
 static uint16_t driveDIStatusReg = 0;    // 0x0B11
+
+static void txnFinished();
+
+static bool onDriveDIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
+  txnFinished();
+  if (event != Modbus::EX_SUCCESS) {
+    Serial.printf("[Limit] DI status read failed: 0x%02X\n", event);
+    return true;
+  }
+
+  static int lastNegativeLimit = -1;
+  static int lastPositiveLimit = -1;
+  int negativeLimit = (driveDIStatusReg & (1u << 2)) != 0; // SI3 / NOT
+  int positiveLimit = (driveDIStatusReg & (1u << 3)) != 0; // SI4 / POT
+
+  if (negativeLimit != lastNegativeLimit) {
+    Serial.printf("[Limit] Low/negative limit SI3: %s\n",
+                  negativeLimit ? "released" : "SWITCHED");
+    lastNegativeLimit = negativeLimit;
+  }
+  if (positiveLimit != lastPositiveLimit) {
+    Serial.printf("[Limit] High/positive limit SI4: %s\n",
+                  positiveLimit ? "released" : "SWITCHED");
+    lastPositiveLimit = positiveLimit;
+  }
+  return true;
+}
 
 // Position block: 4 regs at 0x602A (cmd pos H, cmd pos L, motor pos H, motor pos L)
 static uint16_t drivePosRegs[4] = {0};
@@ -407,6 +435,39 @@ void modbusStartHoming() {
   Serial.println("[ModbusMaster] Homing queued (Pr8.02 = 0x0020)");
 }
 
+void modbusStartHomingDirection(bool positive) {
+  dropWaitingDriveWrites();
+  enqueueDrive(REG_T6_PR810_HOMING,
+               positive ? T6_HOMING_POSITIVE : T6_HOMING_NEGATIVE);
+  enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_HOME);
+  Serial.printf("[ModbusMaster] %s limit-switch homing queued (Pr8.10=0x%04X, Pr8.02=0x0020)\n",
+                positive ? "Positive" : "Negative",
+                positive ? T6_HOMING_POSITIVE : T6_HOMING_NEGATIVE);
+}
+
+void modbusStartHomeSwitchHoming(bool positive) {
+  dropWaitingDriveWrites();
+  uint16_t method = T6_HOMING_SWITCH_MODE |
+                    (positive ? T6_HOMING_POSITIVE : T6_HOMING_NEGATIVE);
+  enqueueDrive(REG_T6_PR810_HOMING, method);
+  enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_HOME);
+  Serial.printf("[ModbusMaster] %s home-switch homing queued (Pr8.10=0x%04X)\n",
+                positive ? "Positive" : "Negative", method);
+}
+
+void modbusSetHomingBackoff(uint32_t pulses) {
+  if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
+  enqueueDrive(REG_T6_PR821_OVERPASS, (uint16_t)pulses);
+  Serial.printf("[ModbusMaster] Homing overpass/back-off set to %lu pulses\n",
+                (unsigned long)pulses);
+}
+
+void modbusSetCurrentPositionAsHome() {
+  dropWaitingDriveWrites();
+  enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_SET_HOME);
+  Serial.println("[ModbusMaster] Set-current-position-as-zero queued (Pr8.02 = 0x0021)");
+}
+
 void modbusStopMotion() {
   dropWaitingDriveWrites();
   enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_ESTOP);
@@ -549,6 +610,11 @@ void modbusTask() {
   // Callback should have cleared txnActive. If the library is idle and our
   // flag is still set, the callback was lost; don't stay stuck.
   if (txnActive && mb.slave() == 0 && millis() - txnStartMs > 50) {
+    if (driveWriteInFlight && driveQCount > 0) {
+      Serial.printf("[ModbusMaster] drive write timeout: dropping 0x%04X <= 0x%04X\n",
+                    driveQReg[driveQHead], driveQVal[driveQHead]);
+      driveQueuePop();
+    }
     txnActive = false;
     driveWriteInFlight = false;
     writeInFlight = WRITE_NONE;
@@ -585,6 +651,16 @@ void modbusTask() {
   }
 
   if (flushWrite()) return;
+
+  // Limit diagnostics run separately so the normal speed/position poll
+  // rotation remains unchanged.
+  if (now - lastLimitPoll >= 1000) {
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_DI_STATUS, &driveDIStatusReg, 1,
+                  onDriveDIPollComplete)) {
+      lastLimitPoll = now;
+      return;
+    }
+  }
 
   // Poll the UI regularly, but back off after a timeout so a missing UI node
   // cannot continually occupy the shared bus while the drive is healthy.

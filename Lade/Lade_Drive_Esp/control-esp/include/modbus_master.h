@@ -86,6 +86,18 @@ void modbusStopMotion();
  */
 void modbusStartHoming();
 
+/** Configure limit-switch homing direction and start homing. */
+void modbusStartHomingDirection(bool positive);
+
+/** Configure a separate home-switch input and start homing. */
+void modbusStartHomeSwitchHoming(bool positive);
+
+/** Set the drive homing overpass/back-off distance in pulses. */
+void modbusSetHomingBackoff(uint32_t pulses);
+
+/** Set the drive's current position as its homing/zero position. */
+void modbusSetCurrentPositionAsHome();
+
 /**
  * Read the 4 DI function registers (Pr4.00–Pr4.03) and print them to Serial.
  * Non-blocking; triggers a background read. Results print when the callback fires.
