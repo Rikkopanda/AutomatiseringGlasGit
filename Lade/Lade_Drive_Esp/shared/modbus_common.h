@@ -109,6 +109,7 @@
 #define T6_DI_ESTOP_NC        0x00A2  // E-STOP (STP), NC — stops drive when open (fail-safe)
 #define T6_DI_ESTOP_NO        0x0022  // E-STOP (STP), NO
 #define T6_DI_HOME_SENSOR_NO  0x000F  // Home sensor (ORG), NO
+#define T6_DI_HOME_SENSOR_NC  0x008F  // Home sensor (ORG), NC
 #define T6_DI_NONE            0x0000  // Not assigned
 
 // T6 soft-reset: write to Pr0.25 to restart drive logic without power cycle
@@ -124,8 +125,8 @@
 #define T6_TRIGGER_ESTOP      0x0040
 #define T6_TRIGGER_HOME       0x0020  // Start homing routine
 #define T6_TRIGGER_SET_HOME   0x0021  // Set current position as homing position
-#define T6_HOMING_NEGATIVE    0x0000  // Limit-switch homing in negative direction
-#define T6_HOMING_POSITIVE    0x0001  // Limit-switch homing in positive direction
+#define T6_HOMING_NEGATIVE    0x0000  // Home-switch homing in negative direction
+#define T6_HOMING_POSITIVE    0x0001  // Home-switch homing in positive direction
 #define T6_HOMING_SWITCH_MODE 0x0004  // Pr8.10 bits 2-7 = homing-switch mode 1
 #define T6_MOVE_SPEED_RPM     60
 #define T6_MOVE_MAX_SPEED_RPM 3000

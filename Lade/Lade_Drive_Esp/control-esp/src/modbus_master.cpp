@@ -33,6 +33,7 @@ static int16_t commandedSpeed = 0;
 // Drive position state
 static int32_t driveActualPosition = 0;
 static int32_t driveCommandPosition = 0;
+static uint16_t drivePRStatus = 0;
 
 // One bus transaction at a time
 static bool txnActive = false;
@@ -44,6 +45,7 @@ static unsigned long uiPollBackoffUntil = 0;
 static unsigned long lastDrivePoll = 0;
 static unsigned long drivePollBackoffUntil = 0;
 static unsigned long lastLimitPoll = 0;
+static unsigned long lastPRStatusPoll = 0;
 
 // UI registers buffer
 static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
@@ -169,6 +171,14 @@ static bool onDriveSpeedPollComplete(Modbus::ResultCode event, uint16_t, void*) 
   } else {
     drivePollBackoffUntil = millis() + 3000;
     Serial.printf("[ModbusMaster] Drive speed poll failed: 0x%02X\n", event);
+  }
+  return true;
+}
+
+static bool onPRStatusPollComplete(Modbus::ResultCode event, uint16_t, void*) {
+  txnFinished();
+  if (event != Modbus::EX_SUCCESS) {
+    Serial.printf("[ModbusMaster] PR status poll failed: 0x%02X\n", event);
   }
   return true;
 }
@@ -430,19 +440,19 @@ void modbusMoveRelative(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer10
 }
 
 void modbusStartHoming() {
-  dropWaitingDriveWrites();
-  enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_HOME);
-  Serial.println("[ModbusMaster] Homing queued (Pr8.02 = 0x0020)");
+  // The former low-limit input is now SI3/ORG, so plain `home` uses the
+  // negative-side home-switch mode by default.
+  modbusStartHomeSwitchHoming(false);
 }
 
 void modbusStartHomingDirection(bool positive) {
   dropWaitingDriveWrites();
-  enqueueDrive(REG_T6_PR810_HOMING,
-               positive ? T6_HOMING_POSITIVE : T6_HOMING_NEGATIVE);
+  uint16_t method = T6_HOMING_SWITCH_MODE |
+                    (positive ? T6_HOMING_POSITIVE : T6_HOMING_NEGATIVE);
+  enqueueDrive(REG_T6_PR810_HOMING, method);
   enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_HOME);
-  Serial.printf("[ModbusMaster] %s limit-switch homing queued (Pr8.10=0x%04X, Pr8.02=0x0020)\n",
-                positive ? "Positive" : "Negative",
-                positive ? T6_HOMING_POSITIVE : T6_HOMING_NEGATIVE);
+  Serial.printf("[ModbusMaster] %s home-switch homing queued (Pr8.10=0x%04X, Pr8.02=0x0020)\n",
+                positive ? "Positive" : "Negative", method);
 }
 
 void modbusStartHomeSwitchHoming(bool positive) {
@@ -494,8 +504,9 @@ void modbusWriteDILimitSwitches() {
   enqueueDrive(REG_T6_PR400_SI1, T6_DI_SRV_ON_NO);
   // SI2 = E-STOP (STP), Normally Closed (fail-safe: open = stop)
   enqueueDrive(REG_T6_PR401_SI2, T6_DI_ESTOP_NC); // Pr4.01 = 0x00A2
-  // SI3 = Negative Limit (NOT), Normally Closed
-  enqueueDrive(REG_T6_PR402_SI3, T6_DI_NL_NC);    // Pr4.02 = 0x00A6
+  // SI3 = Home sensor (ORG), Normally Closed; the former low limit input
+  // is now used as the homing switch.
+  enqueueDrive(REG_T6_PR402_SI3, T6_DI_HOME_SENSOR_NC); // Pr4.02 = 0x008F
   // SI4 = Positive Limit (POT), Normally Closed
   enqueueDrive(REG_T6_PR403_SI4, T6_DI_PL_NC);    // Pr4.03 = 0x00A5
   // Save parameters (Pr0.25 = 0x2211)
@@ -505,7 +516,7 @@ void modbusWriteDILimitSwitches() {
   Serial.println("[ModbusMaster] DI config queued:");
   Serial.println("  SI1 = SRV-ON (NC, internal)");
   Serial.println("  SI2 = E-STOP/STP        (NC) -- wire emergency stop");
-  Serial.println("  SI3 = NL/NOT neg limit  (NC) -- wire limit switch low end");
+  Serial.println("  SI3 = ORG/home switch   (NC) -- wire former low limit switch");
   Serial.println("  SI4 = PL/POT pos limit  (NC) -- wire limit switch high end");
   Serial.println("  Save + soft-reset queued");
 }
@@ -598,6 +609,10 @@ int32_t modbusDriveGetCommandPosition() {
   return driveCommandPosition;
 }
 
+uint16_t modbusDriveGetPRStatus() {
+  return drivePRStatus;
+}
+
 bool modbusIsReady() {
   return initialized;
 }
@@ -651,6 +666,14 @@ void modbusTask() {
   }
 
   if (flushWrite()) return;
+
+  if (now - lastPRStatusPoll >= 250) {
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, &drivePRStatus, 1,
+            onPRStatusPollComplete)) {
+      lastPRStatusPoll = now;
+      return;
+    }
+  }
 
   // Limit diagnostics run separately so the normal speed/position poll
   // rotation remains unchanged.

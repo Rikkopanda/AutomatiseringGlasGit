@@ -170,6 +170,9 @@ int32_t modbusDriveGetActualPosition();
  */
 int32_t modbusDriveGetCommandPosition();
 
+/** Get the latest PR control status from Pr8.02. */
+uint16_t modbusDriveGetPRStatus();
+
 /**
  * Check if Modbus is ready (initialized and bus responsive)
  */
