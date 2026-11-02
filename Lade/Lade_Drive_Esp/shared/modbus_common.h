@@ -81,6 +81,8 @@
 #define REG_T6_PR403_SI4      0x0407  // SI4 function (E-STOP / STP)
 #define REG_T6_PR810_HOMING   0x600A  // Pr8.10 homing method and direction
 #define REG_T6_PR821_OVERPASS 0x6015  // Pr8.21 homing overpass/back-off distance
+#define REG_T6_PR815_HOME_SPEED 0x600F // Pr8.15 homing high speed
+#define REG_T6_PR816_HOME_SLOW  0x6010 // Pr8.16 homing low speed
 #define REG_T6_PR802_TRIGGER  0x6002  // write 0x0011 to run path 1, 0x0040 to e-stop, 0x0020 to home
 #define REG_T6_PATH1_MODE     0x6208
 #define REG_T6_PATH1_POS_H    0x6209
@@ -108,8 +110,8 @@
 #define T6_DI_PL_NO           0x0025  // Positive limit (POT), NO
 #define T6_DI_ESTOP_NC        0x00A2  // E-STOP (STP), NC — stops drive when open (fail-safe)
 #define T6_DI_ESTOP_NO        0x0022  // E-STOP (STP), NO
-#define T6_DI_HOME_SENSOR_NO  0x000F  // Home sensor (ORG), NO
-#define T6_DI_HOME_SENSOR_NC  0x008F  // Home sensor (ORG), NC
+#define T6_DI_HOME_SENSOR_NO  0x0027  // Home switch (ORG), NO
+#define T6_DI_HOME_SENSOR_NC  0x00A7  // Home switch (ORG), NC
 #define T6_DI_NONE            0x0000  // Not assigned
 
 // T6 soft-reset: write to Pr0.25 to restart drive logic without power cycle
@@ -128,9 +130,11 @@
 #define T6_HOMING_NEGATIVE    0x0000  // Home-switch homing in negative direction
 #define T6_HOMING_POSITIVE    0x0001  // Home-switch homing in positive direction
 #define T6_HOMING_SWITCH_MODE 0x0004  // Pr8.10 bits 2-7 = homing-switch mode 1
+#define T6_HOMING_HIGH_SPEED_RPM 10
+#define T6_HOMING_LOW_SPEED_RPM  3
 #define T6_MOVE_SPEED_RPM     60
 #define T6_MOVE_MAX_SPEED_RPM 3000
-#define T6_MOVE_ACCEL_MS      500
+#define T6_MOVE_ACCEL_MS      1500
 #define T6_MOVE_MAX_PULSES    150000
 
 // T6 Monitor Registers (PR Mode / Internal)

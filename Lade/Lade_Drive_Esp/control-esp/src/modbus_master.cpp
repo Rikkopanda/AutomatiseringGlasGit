@@ -34,6 +34,7 @@ static int16_t commandedSpeed = 0;
 static int32_t driveActualPosition = 0;
 static int32_t driveCommandPosition = 0;
 static uint16_t drivePRStatus = 0;
+static int32_t logicalZeroOffset = 0;
 
 // One bus transaction at a time
 static bool txnActive = false;
@@ -55,6 +56,9 @@ static uint16_t uiRegs[UI_REGISTERS_COUNT] = {0};
 static uint16_t driveSpeedReg = 0;       // 0x0B00
 static uint16_t driveAlarmReg = 0;       // 0x0B03
 static uint16_t driveDIStatusReg = 0;    // 0x0B11
+bool modbusIsPositiveLimitActive() {
+  return (driveDIStatusReg & (1u << 3)) == 0; // SI4 is configured NC
+}
 
 static void txnFinished();
 
@@ -65,15 +69,21 @@ static bool onDriveDIPollComplete(Modbus::ResultCode event, uint16_t, void*) {
     return true;
   }
 
-  static int lastNegativeLimit = -1;
+  static int lastHomeSwitch = -1;
   static int lastPositiveLimit = -1;
-  int negativeLimit = (driveDIStatusReg & (1u << 2)) != 0; // SI3 / NOT
+  int homeSwitch = (driveDIStatusReg & (1u << 2)) != 0; // SI3 / ORG
   int positiveLimit = (driveDIStatusReg & (1u << 3)) != 0; // SI4 / POT
 
-  if (negativeLimit != lastNegativeLimit) {
-    Serial.printf("[Limit] Low/negative limit SI3: %s\n",
-                  negativeLimit ? "released" : "SWITCHED");
-    lastNegativeLimit = negativeLimit;
+  if (homeSwitch != lastHomeSwitch) {
+    Serial.printf("[Home switch] SI3 raw=%s: %s\n",
+                  homeSwitch ? "HIGH" : "LOW",
+                  homeSwitch ? "released" : "TRIGGERED");
+    lastHomeSwitch = homeSwitch;
+    if (!homeSwitch) {
+      // Backup stop: the drive should stop on ORG itself, but do not continue
+      // applying torque if the drive-side input configuration is wrong.
+      Serial.println("[Home switch] SI3 triggered: drive native homing should stop");
+    }
   }
   if (positiveLimit != lastPositiveLimit) {
     Serial.printf("[Limit] High/positive limit SI4: %s\n",
@@ -179,6 +189,12 @@ static bool onPRStatusPollComplete(Modbus::ResultCode event, uint16_t, void*) {
   txnFinished();
   if (event != Modbus::EX_SUCCESS) {
     Serial.printf("[ModbusMaster] PR status poll failed: 0x%02X\n", event);
+    } else {
+      static uint16_t lastPRStatus = 0xFFFF;
+      if (drivePRStatus != lastPRStatus) {
+        Serial.printf("[Home status] Pr8.02=0x%04X\n", drivePRStatus);
+        lastPRStatus = drivePRStatus;
+      }
   }
   return true;
 }
@@ -227,7 +243,7 @@ static bool onDIConfigReadComplete(Modbus::ResultCode event, uint16_t, void*) {
         case 0x25: return "POT(pos limit)";
         case 0x02: return "NOT(neg limit) alt";
         case 0x01: return "POT(pos limit) alt";
-        case 0x0F: return "ORG(home sensor)";
+        case 0x27: return "ORG(home switch)";
         case 0x00: return "NOT ASSIGNED";
         default:   return "UNKNOWN";
       }
@@ -406,14 +422,15 @@ void modbusConfigurePrMode() {
 
 void modbusMoveAbsolute(int32_t pulses, uint16_t speedRpm, uint16_t accelMsPer1000Rpm) {
   if (pulses > T6_MOVE_MAX_PULSES) pulses = T6_MOVE_MAX_PULSES;
-  if (pulses < 0) pulses = 0;
+  if (pulses < -T6_MOVE_MAX_PULSES) pulses = -T6_MOVE_MAX_PULSES;
   if (speedRpm > T6_MOVE_MAX_SPEED_RPM) speedRpm = T6_MOVE_MAX_SPEED_RPM;
   if (accelMsPer1000Rpm < 1) accelMsPer1000Rpm = 1;
   if (accelMsPer1000Rpm > 5000) accelMsPer1000Rpm = 5000;
+  int32_t drivePulses = pulses + logicalZeroOffset;
 
   enqueueDrive(REG_T6_PATH1_MODE, T6_PATH_ABSOLUTE);
-  enqueueDrive(REG_T6_PATH1_POS_H, (uint16_t)((pulses >> 16) & 0xFFFF));
-  enqueueDrive(REG_T6_PATH1_POS_L, (uint16_t)(pulses & 0xFFFF));
+  enqueueDrive(REG_T6_PATH1_POS_H, (uint16_t)((drivePulses >> 16) & 0xFFFF));
+  enqueueDrive(REG_T6_PATH1_POS_L, (uint16_t)(drivePulses & 0xFFFF));
   enqueueDrive(REG_T6_PATH1_SPEED, speedRpm);
   enqueueDrive(REG_T6_PATH1_ACCEL, accelMsPer1000Rpm);
   enqueueDrive(REG_T6_PATH1_DECEL, accelMsPer1000Rpm);
@@ -450,6 +467,8 @@ void modbusStartHomingDirection(bool positive) {
   uint16_t method = T6_HOMING_SWITCH_MODE |
                     (positive ? T6_HOMING_POSITIVE : T6_HOMING_NEGATIVE);
   enqueueDrive(REG_T6_PR810_HOMING, method);
+  enqueueDrive(REG_T6_PR815_HOME_SPEED, T6_HOMING_HIGH_SPEED_RPM);
+  enqueueDrive(REG_T6_PR816_HOME_SLOW, T6_HOMING_LOW_SPEED_RPM);
   enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_HOME);
   Serial.printf("[ModbusMaster] %s home-switch homing queued (Pr8.10=0x%04X, Pr8.02=0x0020)\n",
                 positive ? "Positive" : "Negative", method);
@@ -460,6 +479,8 @@ void modbusStartHomeSwitchHoming(bool positive) {
   uint16_t method = T6_HOMING_SWITCH_MODE |
                     (positive ? T6_HOMING_POSITIVE : T6_HOMING_NEGATIVE);
   enqueueDrive(REG_T6_PR810_HOMING, method);
+  enqueueDrive(REG_T6_PR815_HOME_SPEED, T6_HOMING_HIGH_SPEED_RPM);
+  enqueueDrive(REG_T6_PR816_HOME_SLOW, T6_HOMING_LOW_SPEED_RPM);
   enqueueDrive(REG_T6_PR802_TRIGGER, T6_TRIGGER_HOME);
   Serial.printf("[ModbusMaster] %s home-switch homing queued (Pr8.10=0x%04X)\n",
                 positive ? "Positive" : "Negative", method);
@@ -602,11 +623,16 @@ int16_t modbusDriveGetActualSpeed() {
 }
 
 int32_t modbusDriveGetActualPosition() {
-  return driveActualPosition;
+  return driveActualPosition - logicalZeroOffset;
 }
 
 int32_t modbusDriveGetCommandPosition() {
-  return driveCommandPosition;
+  return driveCommandPosition - logicalZeroOffset;
+}
+
+void modbusSetLogicalZero() {
+  logicalZeroOffset = driveActualPosition;
+  Serial.printf("[Position] Logical zero set: drive=%ld\n", (long)driveActualPosition);
 }
 
 uint16_t modbusDriveGetPRStatus() {
@@ -667,24 +693,6 @@ void modbusTask() {
 
   if (flushWrite()) return;
 
-  if (now - lastPRStatusPoll >= 250) {
-    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, &drivePRStatus, 1,
-            onPRStatusPollComplete)) {
-      lastPRStatusPoll = now;
-      return;
-    }
-  }
-
-  // Limit diagnostics run separately so the normal speed/position poll
-  // rotation remains unchanged.
-  if (now - lastLimitPoll >= 1000) {
-    if (beginRead(DRIVE_SLAVE_ID, REG_T6_DI_STATUS, &driveDIStatusReg, 1,
-                  onDriveDIPollComplete)) {
-      lastLimitPoll = now;
-      return;
-    }
-  }
-
   // Poll the UI regularly, but back off after a timeout so a missing UI node
   // cannot continually occupy the shared bus while the drive is healthy.
   if (now >= uiPollBackoffUntil &&
@@ -695,10 +703,28 @@ void modbusTask() {
     return;
   }
 
-  // Background drive poll (speed + position, alternating)
+  // Keep the position and PR status reads ahead of lower-priority DI logging.
   if (now >= drivePollBackoffUntil &&
       now - lastDrivePoll > MODBUS_DRIVE_POLL_INTERVAL_MS) {
     modbusPollDrive();
     lastDrivePoll = now;
+    return;
+  }
+
+  if (now - lastPRStatusPoll >= 250) {
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_PR802_TRIGGER, &drivePRStatus, 1,
+            onPRStatusPollComplete)) {
+      lastPRStatusPoll = now;
+      return;
+    }
+  }
+
+  // DI logging is diagnostic only; run it when it cannot starve position reads.
+  if (now - lastLimitPoll >= 20) {
+    if (beginRead(DRIVE_SLAVE_ID, REG_T6_DI_STATUS, &driveDIStatusReg, 1,
+                  onDriveDIPollComplete)) {
+      lastLimitPoll = now;
+      return;
+    }
   }
 }

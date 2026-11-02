@@ -52,7 +52,7 @@ static uint16_t serialMoveSpeed = T6_MOVE_SPEED_RPM;   // default 60 rpm
 static uint16_t serialMoveAccel = T6_MOVE_ACCEL_MS;    // default 500 ms/1000rpm
 static bool enableActiveHigh = !(ENABLE_ACTIVE_LOW);   // from shared header
 static constexpr uint8_t POSITION_COUNT = 5;
-static int32_t storedPositions[POSITION_COUNT] = {600, 30000, 60000, 90000, 120000};
+static int32_t storedPositions[POSITION_COUNT] = {-8200, 30000, 60000, 90000, 120000};
 static uint8_t currentPositionIndex = 0;
 static Preferences positionPreferences;
 static bool pedalMoveActive = false;
@@ -67,6 +67,7 @@ static bool homingActionActive = false;
 static bool homingBusySeen = false;
 static unsigned long homingActionStartedMs = 0;
 static constexpr unsigned long HOMING_TIMEOUT_MS = 30000;
+static constexpr unsigned long HOMING_START_GRACE_MS = 2000;
 
 struct FootPedalState {
   bool stablePressed = false;
@@ -80,6 +81,12 @@ static bool startPositionAction(int32_t target, const char *source) {
   if (positionActionActive || driverGetState() != DRIVE_STATE_READY) {
     Serial.printf("[%s] Move ignored: action active=%d, driver state=%d\n",
                   source, positionActionActive, driverGetState());
+    return false;
+  }
+  if (target > modbusDriveGetActualPosition() && modbusIsPositiveLimitActive()) {
+    Serial.printf("[%s] Move blocked: positive limit SI4 is active (target=%ld, actual=%ld)\n",
+                  source, (long)target, (long)modbusDriveGetActualPosition());
+    Serial.println("[Move] Use a negative move to back away from the limit");
     return false;
   }
   positionActionTarget = target;
@@ -116,7 +123,6 @@ static void loadStoredPositions() {
     snprintf(key, sizeof(key), "p%u", index);
     storedPositions[index] = positionPreferences.getLong(key, 0);
   }
-  storedPositions[0] = 0;
 }
 
 static void printStoredPositions() {
@@ -182,7 +188,8 @@ static void serviceFootPedalMove() {
 static void serviceHomingAction() {
   if (!homingActionActive || millis() - homingActionStartedMs < PEDAL_MOVE_SETTLE_MS) return;
 
-  if (millis() - homingActionStartedMs >= HOMING_TIMEOUT_MS) {
+  unsigned long homingElapsed = millis() - homingActionStartedMs;
+  if (homingElapsed >= HOMING_TIMEOUT_MS) {
     modbusStopMotion();
     homingActionActive = false;
     setDriveEnabled(false);
@@ -192,9 +199,18 @@ static void serviceHomingAction() {
 
   uint16_t status = modbusDriveGetPRStatus();
   if (status != T6_STATUS_DONE) homingBusySeen = true;
+  if (!homingBusySeen && homingElapsed >= HOMING_START_GRACE_MS) {
+    homingActionActive = false;
+    setDriveEnabled(false);
+    Serial.printf("[Home] Drive did not enter homing (Pr8.02=0x%04X); drive disabled\n",
+                  status);
+    Serial.println("[Home] Run 'motion' to inspect PR status and SI inputs");
+    return;
+  }
   if (!homingBusySeen || status != T6_STATUS_DONE) return;
 
   homingActionActive = false;
+  modbusSetLogicalZero();
   setDriveEnabled(false);
   Serial.println("[Home] Homing complete: drive disabled");
 }
@@ -226,7 +242,7 @@ static void printHelp() {
   Serial.println("  setzero        - set current drive position as zero");
   Serial.println("  move <pulses>  - absolute move (e.g. move 10000)");
   Serial.println("  movel <pulses> - relative move (e.g. movel -5000)");
-  Serial.println("  position <0-4> <pulses> - store pedal position (P0 is always 0)");
+  Serial.println("  position <0-4> <pulses> - store signed pedal position");
   Serial.println("  positions      - print stored pedal positions");
   Serial.println("  speed <rpm>    - set move speed for next move (def 60)");
   Serial.println("  accel <ms>     - set accel time ms/1000rpm (def 500)");
@@ -360,10 +376,11 @@ static void handleSerialCommands() {
     } else {
       uint8_t index = (uint8_t)arg.substring(0, separator).toInt();
       long pulses = arg.substring(separator + 1).toInt();
-      if (index >= POSITION_COUNT || pulses < 0 || pulses > T6_MOVE_MAX_PULSES) {
-        Serial.printf("[Cmd] Position index must be 0-4 and pulses 0-%d\n", T6_MOVE_MAX_PULSES);
+      if (index >= POSITION_COUNT || pulses < -T6_MOVE_MAX_PULSES || pulses > T6_MOVE_MAX_PULSES) {
+        Serial.printf("[Cmd] Position index must be 0-4 and pulses -%d..%d\n",
+                      T6_MOVE_MAX_PULSES, T6_MOVE_MAX_PULSES);
       } else {
-        storedPositions[index] = index == 0 ? 0 : pulses;
+        storedPositions[index] = pulses;
         char key[4];
         snprintf(key, sizeof(key), "p%u", index);
         positionPreferences.putLong(key, storedPositions[index]);

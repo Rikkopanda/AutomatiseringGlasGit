@@ -165,6 +165,9 @@ int16_t modbusDriveGetActualSpeed();
  */
 int32_t modbusDriveGetActualPosition();
 
+/** Make the current drive position the logical zero used by the controller. */
+void modbusSetLogicalZero();
+
 /**
  * Get last polled target command position in pulses (signed 32-bit)
  */
@@ -172,6 +175,9 @@ int32_t modbusDriveGetCommandPosition();
 
 /** Get the latest PR control status from Pr8.02. */
 uint16_t modbusDriveGetPRStatus();
+
+/** True when SI4 reports the normally-closed positive limit as active. */
+bool modbusIsPositiveLimitActive();
 
 /**
  * Check if Modbus is ready (initialized and bus responsive)
