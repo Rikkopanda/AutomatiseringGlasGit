@@ -196,7 +196,7 @@
 #define CONTROL_ENABLE_PIN     13  // Enable line
 #define CONTROL_FOOT_PEDAL_PIN 18  // Normally-open foot pedal to 3.3V
 #define USE_ENABLE_PIN 1    // 1 = physical enable wire used, 0 = no enable pin on drive
-#define ENABLE_ACTIVE_LOW 1   // 1: ENABLE low = ON (common), 0: ENABLE high = ON
+#define ENABLE_ACTIVE_LOW 0   // 1: ENABLE low = ON, 0: ENABLE high = ON
 
 // ============================================================================
 // TIMING CONSTANTS
